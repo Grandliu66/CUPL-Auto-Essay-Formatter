@@ -1,0 +1,33 @@
+# ---- 虚拟环境与缓存（可重建）
+.venv/
+packaging/.venv/
+__pycache__/
+*.pyc
+
+# ---- 构建产物（packaging\build.ps1 随时可以重出）
+build/
+dist/
+
+# ---- 临时/中间产物与自动备份（不进版本库；留在磁盘上不动）
+work/
+backup/
+Adversarial Automatic Test/_out/
+
+# ---- Office 打开文档时留下的锁文件/临时文件
+~$*
+*.tmp
+
+# ---- 开发过程中的一次性调试/探测脚本（留在本地即可，不进版本库）
+tools/_*.py
+Adversarial Automatic Test/_*.py
+# run_aat.py 官方十层跑批实际会调用这两个（不是一次性脚本，得留着）
+!Adversarial Automatic Test/_rerun_all.py
+!Adversarial Automatic Test/_check_alerts_edge.py
+
+# ---- 编辑器/AI 工具本地状态，与项目无关
+.vscode/tasks.json
+.continue/
+
+# ---- 开发参考资料：含用户本人真实稿件、内部设计草稿；本地留着给 AAT/开发用，不进公开仓库
+reference/
+docs/

@@ -1,0 +1,3 @@
+# 打包用（只在 packaging/build.ps1 的专用环境里装；不进运行时，也不装进项目 .venv）
+-r requirements.txt
+pyinstaller==6.22.3
