@@ -137,6 +137,26 @@ BLOCK_NAME = {
 }
 
 
+def _file_fingerprint(path: pathlib.Path | None) -> str | None:
+    """文件当前的"内容指纹"（修改时间+大小），取不到就是 None。
+
+    用来判断"确认时换算出的 index/ops"跟磁盘上的文件是不是还对得上：导入
+    之后（不点"重新识别"）直接在 Word 里增删段落再导出，以前会拿旧下标去
+    配新文档，内容/样式错位落到邻居段上、多出来的条目还静默丢掉，不报错
+    也不拦截（2026-09-22 审计揪出的真 bug——"导出前比对拦截"当时确实没做）。
+    不比文件内容本身（太贵，每次导出都要整份读一遍），比修改时间+大小
+    足够发现"外部改过"这种情况，跟 `main_window._doc_fingerprint` 是同一个
+    思路。
+    """
+    if path is None:
+        return None
+    try:
+        st = path.stat()
+        return f"{st.st_mtime_ns}|{st.st_size}"
+    except OSError:
+        return None
+
+
 def detected_parts(rows: list) -> set[str]:
     """rows 里哪些结构块真的从文档里认出了内容——不是虚线空位，是真段落。"""
     return {r.block for r in rows if r.block and r.kind != "slot"}
@@ -1151,6 +1171,12 @@ class AdjustWindow:
         else:
             self.rows = build_blank_rows()
             self.index = None
+        # 记下这一刻磁盘上文件的指纹——`self.rows`/`self.index` 就是照这个
+        # 状态识别出来的（不管是刚才 `build_rows()` 现读的，还是调用方
+        # `initial_rows` 传进来的：后者也是调用方紧挨着刚 `build_rows()`
+        # 过，见 `main_window._rebuild_struct_adjust()`）。导出前要拿它跟
+        # 当时磁盘上的文件比，看这份识别结果是不是还作数。
+        self._recognized_fingerprint = _file_fingerprint(doc_path)
         # "重置"要退回的那一份：**构造这一刻的行**（＝刚识别完，或主窗口这次
         # 重建时拿到的识别结果）。用户 2026-09-16 定："既然已经有重新识别了，
         # 重置不重新识别"——重置只撤销手动修改，不再读盘重跑识别（读盘归
@@ -1172,6 +1198,7 @@ class AdjustWindow:
         # 才写入"）。
         self.confirmed_rows = copy.deepcopy(self.rows)
         self.confirmed_index = self.index
+        self.confirmed_fingerprint = self._recognized_fingerprint
         self.confirmed_settings = self._settings()      # 封面范围也是"确认了才作数"
         # 部件启用勾选（`ENABLED`）跟行序一样，也得有"确认了才作数"的快照——
         # 它是全模块共享的一个字典，`_build_ops_for_export` 以前直接读它的
@@ -1659,10 +1686,22 @@ class AdjustWindow:
             self.cells.append((x0, y0, zone_right, y1, row, row.col))
             span = self._draw_cell_content(row, item, x0, y0, zone_right, y1, zone_right)
         else:
+            # `row.col` 记的是"这行内容画在哪一列"，正常情况下总能在 `cols`
+            # 里找到同名列。但跨区互换位置（`_apply_swap_rows`，按用户
+            # 2026-09-19 的口径"随便换，不要求同一个部件"）之后，这行换到了
+            # 别的区，`row.col` 还是旧区的列名，新区的 `cols` 里根本没有这个
+            # 名字——以前就直接一整行都画不出来（文字消失、拖拽/右键也跟着
+            # 失效，因为这些都挂在 `_draw_cell_content` 里）。这里退化处理：
+            # 找不到匹配列就落到新区第一列，并把 `row.col` 改过来，行为跟
+            # "认领空位"落到新区时一致，不会再整行凭空消失（2026-09-22 审计）。
+            col_keys = [key for key, *_ in cols]
+            matched_key = row.col if row.col in col_keys else col_keys[0]
+            if matched_key != row.col:
+                row.col = matched_key
             for key, _hdr, x0, w in cols:
                 x1 = x0 + w
                 self.cells.append((x0, y0, x1, y1, row, key))
-                if row.col == key:
+                if matched_key == key:
                     span = self._draw_cell_content(row, item, x0, y0, x1, y1, zone_right)
         # 附录序号题名：在「结构标签」栏右端标一行小字（用户 2026-09-16 定）。
         # 只在这一行仍属附录时画——用户把它拖到别的部件后，标记就跟着消失。
@@ -2556,6 +2595,12 @@ class AdjustWindow:
         seg_b = self.rows[t0:t0 + len(dragged_rows)]
         if len(seg_b) < len(dragged_rows) or any(id(r) in dragged_ids for r in seg_b):
             return False, None
+        # 目录/清单域那一行自己进不了 `self.draggables`（画面上根本拖不动它），
+        # 但以前这里没拦，别的行拖过去照样能把它顶走——"自己不能拖"和"能被
+        # 别人顶走"不该是两条不一致的规矩（2026-09-22 审计揪出的）。域行只要
+        # 出现在要互换的这一段（`seg_b`）里，就直接拒绝。
+        if any(r.kind == "toc_field" for r in seg_b):
+            return False, None
         return True, seg_b
 
     def _apply_swap_rows(self, dragged_rows: list, seg_b: list) -> None:
@@ -2818,15 +2863,27 @@ class AdjustWindow:
                      # 掉进标签位的还要补上部件名——普通正文被拖进"摘要"标签位，
                      # 导出时那一段会被写成【摘要】，显示不能还露原文。
                      heading=dragged.heading,
-                     # ⚠️ 落进的新位置不是"标签位"时，`label` 必须清成 None——
-                     # 以前写成 `dragged.label or (... if new_kind=="label" else
-                     # None)`，`or` 短路会在新位置明明不是标签位时，只要
-                     # `dragged.label` 原来非空就照样把旧标签留下来（比如一段
-                     # 文字先被拖进"摘要"标签格、再被拖到别处，界面仍显示
-                     # "【摘要】"，导出还多报一条"重复的部件"，2026-09-22
-                     # 审计揪出的真 bug）。改成先看新位置是不是标签位，不是
-                     # 就直接清空，不看 `dragged.label` 原来是什么。
-                     label=(dragged.label or slot.slot_for) if new_kind == "label" else None)
+                     # 附录序号题名标记也要跟着走：以前这里没传，拖进空位后
+                     # 界面上那句"附录序号题名"小字就凭空消失了（只影响结构页
+                     # 显示，导出走 `detect.detect_appendix_entries` 独立重新
+                     # 判定，不受这个字段影响，但显示跟实际状态对不上总是会
+                     # 让人误会，2026-09-22 审计揪出的）。
+                     appendix_entry=dragged.appendix_entry,
+                     # `label` 跟 `block` 一样，只认新位置（`slot.slot_for`），
+                     # 不掺和 `dragged` 原来带的旧标签：
+                     # · 落进的新位置不是"标签位"——直接清成 None。以前写成
+                     #   `dragged.label or (... if new_kind=="label" else None)`，
+                     #   `or` 短路会在新位置明明不是标签位时，只要 `dragged.label`
+                     #   原来非空就照样把旧标签留下来（一段文字先被拖进"摘要"
+                     #   标签格、再被拖到别处，界面仍显示"【摘要】"，导出还多报
+                     #   一条"重复的部件"）。
+                     # · 落进的新位置**是**标签位——`label` 必须跟着新位置变成
+                     #   `slot.slot_for`，不能保留 `dragged.label` 的旧值：把
+                     #   "摘要"标签行拖进"关键词"标签位，以前 `dragged.label`
+                     #   （"摘要"）非空就短路保留，界面还是"【摘要】"，导出却
+                     #   按新位置算成关键词，图文不符（2026-09-22 审计揪出的
+                     #   真 bug）。
+                     label=(slot.slot_for if new_kind == "label" else None))
         self.rows[si] = new_row
         if dragged.block:
             # 原来位置永远留一个空位——拖回去的落脚点（不再"一行消失一行"）
@@ -3052,6 +3109,13 @@ class AdjustWindow:
 
     def _relayout_and_draw(self) -> None:
         self._resize_job = None
+        # 结构页重建（换文档/切预设）只销毁子控件，不取消这个定时器
+        # （`main_window` 那边 `for w in struct_tab.winfo_children(): w.destroy()`）——
+        # 120ms 内又赶上重建的话，这个回调触发时画布已经不在了，
+        # `relayout()`/`draw()` 会抛 TclError（2026-09-22 审计揪出的）。
+        # 跟本文件其它定时器回调（`on_undo` 等）一样，先确认画布还活着。
+        if not self.canvas.winfo_exists():
+            return
         self.relayout()
         self.draw()
 
@@ -3065,6 +3129,7 @@ class AdjustWindow:
         """
         self.confirmed_rows = copy.deepcopy(self.rows)
         self.confirmed_index = self.index
+        self.confirmed_fingerprint = self._recognized_fingerprint
         self.confirmed_settings = self._settings()
         self.confirmed_enabled = dict(ENABLED)
         self.dirty = False
@@ -3085,7 +3150,7 @@ class AdjustWindow:
             messagebox.showerror(
                 "找不到原文件",
                 f"原文件不见了（可能被移动、改名或删除）：\n{self.doc_path}\n\n"
-                "这一步需要重新读取原文件，暂时做不了。请在主窗口重新导入这份文档。",
+                "这一步需要重新读取原文件，无法执行。请在主窗口重新导入这份文档。",
                 parent=self.root)
             return False
         return True
@@ -3098,6 +3163,7 @@ class AdjustWindow:
         self.rows, self.index = build_rows(self.doc_path, self.cover_end, self.heading_scheme)
         self._pristine_rows = copy.deepcopy(self.rows)
         self._pristine_index = self.index
+        self._recognized_fingerprint = _file_fingerprint(self.doc_path)
         self._selected.clear()
 
     def _reload_rows(self, label: str, keep_enabled: bool, push_undo: bool = True) -> None:
@@ -3122,24 +3188,44 @@ class AdjustWindow:
         self._rerecognize()
         seed_enabled_from(self._preset_baseline, self.rows)
         if keep_enabled:
+            # 保留用户当前的勾选状态——包括"关掉"的。以前只把 `kept` 里
+            # 开着的部件重新点亮，关着的部件如果在新识别结果里仍然被认出
+            # （文档没删掉那段内容，通常都还在），会被上面 `seed_enabled_from`
+            # 按"预设∪识别到的部件"重新点亮，用户手动关掉的勾又被点回去了
+            # （2026-09-22 审计揪出的：函数自己的文档字符串说"保留用户勾选"，
+            # 实现却没管关掉的那一半）。这里改成两种状态都照搬，不再只搬
+            # "开着"的一半。
             for part, on in kept.items():
-                if on and part in ENABLED:
-                    ENABLED[part] = True
+                if part in ENABLED:
+                    ENABLED[part] = on
         annotate_blocks(self.rows)
         self.relayout()
         self.draw()
 
-    def set_heading_scheme(self, scheme: str | None) -> None:
+    def set_heading_scheme(self, scheme: str | None) -> bool:
         """切换原文的标题编号方案，并按新方案整表重新识别。跟"重新识别"一样
         是**没确认的调整**：可以 Ctrl+Z（撤回点连同旧方案、旧索引一起存，
-        见 `_push_undo`），点了"确认"才作数。"""
-        if scheme == self.heading_scheme or self.doc_path is None:
-            return
+        见 `_push_undo`），点了"确认"才作数。
+
+        返回是不是真的切成了——`doc_path is None`/源文件读不到时切不成、
+        原样退回。调用方（`main_window._on_heading_scheme_changed`）要凭
+        这个返回值决定自己那份"已经切成了哪个方案"的记录要不要跟着改、
+        导入区的单选要不要跟着拨过去；以前不看返回值、无论成没成都直接
+        当作切成功了，切失败时界面显示"已切换"、单选也停在新方案上，
+        但结构页其实还是旧方案，再点同一个选项因为"没变化"直接被判定
+        "什么都不用做"、点不动，得先点回另一个方案才能重试
+        （2026-09-22 审计揪出的）。
+        """
+        if scheme == self.heading_scheme:
+            return True
+        if self.doc_path is None:
+            return False
         if not self._confirm_source_readable():
-            return
+            return False
         self._push_undo("切换标题编号方式")     # 必须在改方案之前拍，快照里才是旧方案
         self.heading_scheme = scheme
         self._reload_rows("切换标题编号方式", keep_enabled=True, push_undo=False)
+        return True
 
     def on_apply_order_fix(self) -> None:
         """「一键重排」（2026-09-19 新增，用户明确要求；原名"按预设一键重排"，因为顺序

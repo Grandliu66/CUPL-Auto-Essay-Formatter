@@ -673,6 +673,17 @@ def _make_auto_numbered_reference(
             num_id = OxmlElement("w:numId")
             existing.append(num_id)
         num_id.set(qn("w:val"), str(numbering_id))
+        # 改指的同时把层级也钉回第 0 层——我们建的参考文献编号定义
+        # （`_build_reference_abstract`）只有一层（ilvl=0）。这一段原来的
+        # `w:numPr` 如果层级不是 0（比如原来是别的多级列表里嵌套的一项），
+        # 只改 numId、不碰 ilvl 的话，段落会指向我们定义里根本不存在的那一
+        # 层，Word 那边这个号可能就不出来了（2026-09-22 审计揪出的：疑似，
+        # 未在 Word 里实机复核）。
+        ilvl = existing.find(qn("w:ilvl"))
+        if ilvl is None:
+            ilvl = OxmlElement("w:ilvl")
+            existing.insert(0, ilvl)
+        ilvl.set(qn("w:val"), "0")
         return
 
     _strip_paragraph_prefix(paragraph, _MANUAL_REF_NUMBER)

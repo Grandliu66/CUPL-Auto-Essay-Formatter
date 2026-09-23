@@ -4,11 +4,10 @@
 阿拉伯页码）两节——封面（cover.py）是在全部套版完成后才拼到文档最前面的
 独立一节，封面节不放页眉，不归这里管，所以没有第三节要处理。
 
-Excel"页眉页脚"小节那几行与节的对应关系：**从最后一节往前配**
-（`apply_header_footer`，2026-09-16 修）——源文件里的分节数可能跟预设的
-行数对不上（比如整篇只有一个节），从前往后配会把"前置部分"的页眉页码
-套到全篇（实测过：单节文档整篇被套上前置页眉/罗马页码）。表格里的顺序
-仍然是纸质文档上的节顺序，只是配对方向反过来。
+Excel"页眉页脚"小节那几行与节的对应关系：按"正文从第几节开始"分两边配
+（`apply_header_footer`，配合 `split_body_section` 返回的下标）——源文件里
+的分节数可能跟预设的行数对不上（源文档自带分节符，或整篇只有一个节），
+按下标之前/之后分，不管源文档原来带了几节，都能正确落进"前置"或"正文"。
 """
 
 from __future__ import annotations
@@ -29,7 +28,7 @@ _TOC_INSTR = 'TOC \\o "1-3" \\h \\z \\u'
 _TOC_PLACEHOLDER = "（目录内容由 Word 自动生成，打开后右键选择「更新域」，或全选后按 F9 刷新）"
 
 
-def split_body_section(document: DocumentObject, body_start_paragraph: Paragraph | None) -> None:
+def split_body_section(document: DocumentObject, body_start_paragraph: Paragraph | None) -> int:
     """在 body_start_paragraph（引言所在段落，不论是识别出来的还是缺失后
     自动补上的）前面插入分节符，把文档切成"前置部分"和"正文部分"两节。
 
@@ -38,9 +37,17 @@ def split_body_section(document: DocumentObject, body_start_paragraph: Paragraph
     它在 XML 树里的位置是稳的。body_start_paragraph 是 None，或者引言
     就是文档第一段（前面没有前置部分内容可分），就什么都不做，文档仍是
     单节。
+
+    返回"正文部分"从第几节开始（下标进 document.sections）。源文档如果本来
+    就带着别的分节符（比如官方模板自带 5 节，或 WPS 存法），这里插入的只是
+    "前置/正文"这一刀，不会去动那些跟我们规则无关的节——所以调用方（目前
+    是 `apply_header_footer`）不能假设"文档正好两节"，而要按这个下标分左右：
+    这个下标之前的节全算前置部分，这个下标（含）往后全算正文部分。没有插
+    分节符（返回 0）就是"整份文档全算正文部分"，跟以前"单节文档自然落到
+    正文部分那一行"的效果一致。
     """
     if body_start_paragraph is None:
-        return
+        return 0
     # 往回找最近的一个**段落**兄弟：分节符只能挂在段落的 pPr 上，而正文首标题
     # 前面那一个兄弟可能是表格（表格挂不了 sectPr）。以前遇到不是 w:p 就直接
     # return，结果是整篇只剩一节——前置部分的罗马页码、正文部分的页眉全都不
@@ -49,7 +56,18 @@ def split_body_section(document: DocumentObject, body_start_paragraph: Paragraph
     while prev_p is not None and prev_p.tag != qn("w:p"):
         prev_p = prev_p.getprevious()
     if prev_p is None:
-        return
+        return 0
+    # 分节符挂在 prev_p 身上，所以"正文部分"从 prev_p 所在节的下一节开始——
+    # 数一数 prev_p 之前（不含自己）还有几个段落级 w:sectPr，就是新正文节的
+    # 下标（source 里原有的分节符都算在内，不会被跳过或误算）。
+    body_section_index = 1
+    walker = prev_p.getprevious()
+    while walker is not None:
+        if walker.tag == qn("w:p"):
+            walker_pPr = walker.find(qn("w:pPr"))
+            if walker_pPr is not None and walker_pPr.find(qn("w:sectPr")) is not None:
+                body_section_index += 1
+        walker = walker.getprevious()
     body = document._element.body
     sentinel_sectPr = body.get_or_add_sectPr()
     front_matter_sectPr = sentinel_sectPr.clone()
@@ -66,6 +84,7 @@ def split_body_section(document: DocumentObject, body_start_paragraph: Paragraph
         for ref in front_matter_sectPr.findall(tag):
             front_matter_sectPr.remove(ref)
     prev_p.set_sectPr(front_matter_sectPr)
+    return body_section_index
 
 
 def _set_page_number_format(sectPr, fmt: str | None, start: int = 1) -> None:
@@ -274,15 +293,29 @@ def apply_header_footer(
     styles: StyleRegistry,
     header_bottom_line: bool = True,
     header_line_extend_cm: tuple[float, float] = (0.0, 0.0),
+    body_section_index: int = 0,
 ) -> None:
     header_style = None
-    # 配对方向：**从最后一节往前配**（用户 2026-09-16 拍板"你看着办"）。
-    # 预设「页眉页脚」那两行的顺序就是分节后的节顺序（末行＝正文部分），所以
-    # 正文部分永远对着**最后一节**。以前是 `zip(sections, rules)` 按位置从前往后
-    # 配：文档只剩一节（没有引言、也没识别出正文首标题）时，那唯一一节会套上
-    # "前置部分"那一行——整篇变成罗马页码 + 前置页眉，而且没有任何提示。
-    # 现在从后往前配，单节文档自然落到"正文部分"那一行上。
-    pairs = list(zip(document.sections[::-1], rules[::-1]))[::-1]
+    # 配对方式：不是按位置从前往后/从后往前数，而是按"正文从第几节开始"配
+    # （`body_section_index`，来自 `split_body_section` 的返回值）——下标之前
+    # 的节全套 `rules[0]`（前置部分），下标（含）往后的节全套 `rules[-1]`
+    # （正文部分）。
+    #
+    # 以前是按位置"从最后一节往前配"：假设文档正好两节。源文档如果本来就带
+    # 着别的分节符（官方模板自带 5 节、WPS 存法等），`split_body_section`
+    # 只会在正文起点插一刀，不会动那些跟我们规则无关的节——于是文档变成
+    # 6 节，而"从后往前"只套中最后 2 节，中间那些源文档自带的节完全没套上
+    # 任何规则，"前置部分"那一行反而套到了正文里的某一节上（2026-09-22
+    # 审计报的真 bug：用官方模板导出，正文开头几页页码变成罗马数字）。
+    # 现在改成按 `body_section_index` 分两边，不管源文档原来带了几节分节符，
+    # 都能正确落进"前置"或"正文"。
+    if len(rules) >= 2:
+        pairs = [(section, rules[0] if idx < body_section_index else rules[-1])
+                 for idx, section in enumerate(document.sections)]
+    elif rules:
+        pairs = [(section, rules[0]) for section in document.sections]
+    else:
+        pairs = []
     for section, rule in pairs:
         if rule.header_text:
             section.header.is_linked_to_previous = False

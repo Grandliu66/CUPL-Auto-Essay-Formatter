@@ -187,6 +187,7 @@ class FmtGrid(tk.Frame):
         self._parts_flat: list[_Part] = []
         self._editor = None                      # 当前编辑框控件
         self._editing: _Part | None = None
+        self._edit_start_value: str | None = None  # 打开编辑框那一刻的写法，Esc 用来回退
         self._cursor: _Part | None = None        # 复选框格的键盘光标
         self._ed_item = None
         self._eds: dict[str, tk.Widget] = {}
@@ -726,7 +727,7 @@ class FmtGrid(tk.Frame):
         for seq, step in (("<Tab>", 1), ("<Shift-Tab>", -1), ("<ISO_Left_Tab>", -1)):
             w.bind(seq, lambda e, st=step: self._tab(st))
         w.bind("<Return>", lambda e: self._end_edit())
-        w.bind("<Escape>", lambda e: self._end_edit())
+        w.bind("<Escape>", lambda e: self._cancel_edit())
         w.bind("<FocusOut>", lambda e: self.after(80, self._maybe_close))
         if kind != "entry":
             w.bind("<<ComboboxSelected>>", lambda e: self.after_idle(self._end_edit))
@@ -743,6 +744,8 @@ class FmtGrid(tk.Frame):
         self._ed_item = self.canvas_body.create_window(
             x0, y0, anchor="nw", width=x1 - x0, height=y1 - y0, window=w, tags=("editor",))
         self._editor, self._editing = w, p
+        # Esc 要能退回打开这格编辑框之前的写法（见 `_cancel_edit`），先记一下。
+        self._edit_start_value = p.var.get() if p.var is not None else None
         self.update_idletasks()
         w.focus_set()
         if p.kind == "entry" or p.kind == "combo":
@@ -776,6 +779,18 @@ class FmtGrid(tk.Frame):
         if f and f.startswith(str(self._editor)):
             return
         self._end_edit(focus_canvas=False)
+
+    def _cancel_edit(self) -> str:
+        """Esc：退回打开这格编辑框之前的写法，不是当"回车确认"一样接受当前
+        输入——以前 Esc 和 Enter 绑的是同一个 `_end_edit`，Esc 也会把格子里
+        还没改完/写错的内容当成确认值留下，直到点"保存"才报"无法识别的
+        字号写法"，也不说是哪一行（2026-09-22 审计揪出的）。这里先把值改
+        回打开编辑框那一刻的样子，再走正常的收尾。
+        """
+        p = self._editing
+        if p is not None and p.var is not None and self._edit_start_value is not None:
+            p.var.set(self._edit_start_value)
+        return self._end_edit()
 
     def _end_edit(self, focus_canvas: bool = True) -> str:
         was_open = self._editor is not None

@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import pathlib
 import shutil
+import stat
 import time
 
 from docx import Document
@@ -18,6 +19,20 @@ TXT_ENCODINGS = ("utf-8-sig", "utf-8", "gbk")
 
 class LoadError(Exception):
     pass
+
+
+def _clear_readonly(path: pathlib.Path) -> None:
+    """去掉文件的只读位——`shutil.copy`/`copy2` 会把源文件的只读属性一起
+    搬过来（2026-09-22 审计揪出的）：论文本身被设成"只读"时，工作副本、
+    备份文件都跟着变只读，之后管线 `document.save()` 或自动清理 `unlink()`
+    就会因为 PermissionError 失败。这里复制出来的都是我们自己的副本（不是
+    用户的原始文件），清掉只读不影响"不修改原始文件"这条约定。失败（比如
+    压根没有这个权限）就算了，不影响调用方后续的报错处理。
+    """
+    try:
+        path.chmod(stat.S_IWRITE | stat.S_IREAD)
+    except OSError:
+        pass
 
 
 def _read_text(path: pathlib.Path) -> str:
@@ -71,6 +86,7 @@ def load_as_working_copy(source: str | pathlib.Path, work_dir: str | pathlib.Pat
                     f"工作目录里已经有 1000 份「{source.stem}-工作副本」，"
                     f"请先清理 {work_dir} 再试（工具不会就地修改你导入的文件）")
         shutil.copy2(source, target)
+        _clear_readonly(target)
         return target
 
     if suffix == ".txt":
@@ -153,6 +169,7 @@ def backup_import(source: str | pathlib.Path, backup_dir: str | pathlib.Path) ->
     # 备份会被这一轮清理直接清掉（2026-09-14 实测复现）。这里要表达的是
     # "这份备份是什么时候做的"，所以保留复制那一刻的时间。
     shutil.copy(source, target)
+    _clear_readonly(target)
 
     names = _load_backup_manifest(backup_dir)
     names.add(target.name)
@@ -210,8 +227,22 @@ def prune_backups(backup_dir: str | pathlib.Path, amount: int, unit: str = "条"
         cutoff = time.time() - amount * seconds
         stale = [p for p in files if p.stat().st_mtime < cutoff]
 
+    # 逐个删，单个文件删不掉（占用中、还是只读）不能让整个函数中断——以前
+    # 一份删不掉，本该删的和已经删掉的都不会存进清单，下次还会再报一遍，
+    # 且已删除的份数也永远算不进 `removed`（2026-09-22 审计揪出的）。这里
+    # 每份独立 try，删不掉的先试一次去只读再重试，还是不行就跳过，不影响
+    # 其它份。
+    removed = 0
     for p in stale:
-        p.unlink()
+        try:
+            p.unlink()
+        except OSError:
+            _clear_readonly(p)
+            try:
+                p.unlink()
+            except OSError:
+                continue
         managed.discard(p.name)
+        removed += 1
     _save_backup_manifest(backup_dir, managed)
-    return len(stale)
+    return removed

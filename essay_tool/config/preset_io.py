@@ -43,6 +43,11 @@ def load_preset_json(path: str | pathlib.Path) -> PresetConfig:
         raise PresetIOError(f"打不开预设文件：{exc}") from exc
     except json.JSONDecodeError as exc:
         raise PresetIOError(f'"{path.name}" 不是合法的 JSON：{exc}') from exc
+    except UnicodeDecodeError as exc:
+        # 文件不是 UTF-8 编码（比如用记事本"另存为"选了 ANSI/UTF-16）：
+        # 以前这个异常没被接住，会带着英文原文一路冒出去（2026-09-22
+        # 审计揪出的）。跟"不是合法 JSON"同一类情况，一起包成友好提示。
+        raise PresetIOError(f'"{path.name}" 不是 UTF-8 编码，读不出内容：{exc}') from exc
     try:
         return preset_from_dict(data)
     except (KeyError, ValueError) as exc:

@@ -33,6 +33,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from docx import Document  # noqa: E402
+from docx.oxml.ns import qn  # noqa: E402
 
 from essay_tool.config.preset_io import load_preset  # noqa: E402
 from essay_tool.engine.alerts import AlertCollector  # noqa: E402
@@ -99,6 +100,21 @@ def build_template(
     src_dir.mkdir(parents=True, exist_ok=True)
     blank_source = src_dir / "_blank.docx"
     doc = Document()
+    # python-docx 自带的空白模板 docDefaults 里写死了"段后 10 磅、1.15 倍
+    # 行距"（Word 自己的默认新文档就是这个样子）。行距套版时会被显式改写，
+    # 不受影响；但段后间距——按"留空＝继承底座"这条通用规则（见 units.py
+    # `_parse_plain_number`）——预设没写就不覆盖，于是这个"底座"本身带着的
+    # 10 磅直接透出来，敲出来的示例正文段间距明显偏大（真实论文走的是用户
+    # 自己文档原有的样式，不会撞上这个问题，只有"导出空白模板"这条路会
+    # ，2026-09-22 审计揪出的）。这里清空这个 docDefaults，改回 Word 真正
+    # 的零基线（不写等于 0/单倍），后面按预设显式写的属性不受影响。
+    pPrDefault = doc.styles.element.find(qn("w:docDefaults") + "/" + qn("w:pPrDefault"))
+    if pPrDefault is not None:
+        default_pPr = pPrDefault.find(qn("w:pPr"))
+        if default_pPr is not None:
+            spacing = default_pPr.find(qn("w:spacing"))
+            if spacing is not None:
+                default_pPr.remove(spacing)
     for text in _SAMPLE_BODY:                   # 正文示例区（见 _SAMPLE_BODY 注释）
         doc.add_paragraph(text)
     doc.save(str(blank_source))

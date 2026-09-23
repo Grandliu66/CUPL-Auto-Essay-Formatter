@@ -114,6 +114,12 @@ class CanvasTable(tk.Frame):
         if self.ncols and not need_v:
             self.colw[-1] += self.vscroll_w          # 不竖滚就把那 17px 也让给最右列
             self._rewrap_last()
+            # 最右列变宽了，折行可能因此少了一行（比如原来刚好多折一行）——
+            # 行高是按折行前的 `self.cells` 算的（`_relayout` 里那次 `_rows()`
+            # 用的是加宽之前的宽度），这里不重算的话，行高就停在旧值上，
+            # 边界情形会在某一行底下多出这一份宽度差对应的一截空白
+            # （2026-09-22 审计揪出的）。
+            self._rows()
 
         # ---- ④ 画布 + 滚动条 ----
         # 滚动条**对象总是建**（`_on_yscroll` 要回调它），只是不需要时不 pack。

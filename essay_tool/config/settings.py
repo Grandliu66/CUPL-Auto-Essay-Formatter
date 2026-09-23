@@ -44,7 +44,11 @@ def load_settings() -> GuiSettings:
         return GuiSettings()
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        # 文件被存成了别的编码（比如用记事本"另存为"选了 UTF-16/ANSI）：
+        # `read_text` 会抛 UnicodeDecodeError，以前没接住，直接冒到启动期
+        # 崩溃弹窗、每次开程序都弹（2026-09-22 审计揪出的）。这跟上面两种
+        # "文件坏了"是同一类情况，一起退回默认值。
         return GuiSettings()
     if not isinstance(data, dict):
         # 文件里是数组/字符串/数字（被手工改坏了）：`data.items()` 会抛

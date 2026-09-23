@@ -217,7 +217,17 @@ def run(
     else:
         raise ValueError("run() 需要 preset_config 或者 preset_path 至少给一个")
     if structure_override:
-        preset.structure_required.update(structure_override)
+        # 不能原地 `.update()`：`preset` 在 `preset_config` 分支只是调用方
+        # 那个对象的引用，不是副本——原地改会把这次的覆盖值永久写进调用方
+        # 手上那份预设，同一个对象要是被复用着再调一次 `run()`（哪怕那次
+        # 没传 `structure_override`），上次的覆盖值还留着（2026-09-22 审计
+        # 揪出的：GUI 现在每次导出都现造一份新对象，暂时不会踩到，但这是
+        # 潜在风险）。换成 `dataclasses.replace`，只有 `structure_required`
+        # 这个字段换成新字典，不动调用方原来的对象（`PresetConfig` 不能
+        # `copy.deepcopy`——会把 `Length` 这类字段的内部换算值再转一遍，
+        # 2026-09-19 踩过的坑，见别处同类注释）。
+        preset = dataclasses.replace(
+            preset, structure_required={**preset.structure_required, **structure_override})
     working_path = load_as_working_copy(source, work_dir)
 
     try:
@@ -258,9 +268,19 @@ def run(
         # body 末尾那个分节定义之前。
         following = (document.paragraphs[cover_end + 1]._p
                      if cover_end + 1 < len(document.paragraphs) else None)
+        # body 自己的分节定义正常应该是最后一个直属子元素，但 WPS 存出来的
+        # 文档可能把它放在别的位置（2026-09-22 审计：平时作业.docx 这份 WPS
+        # 文档把它放在 body 第一个子元素）——以前"碰到任何 w:sectPr 就 break"
+        # 会让整个封面一段都收不到、且没有任何提示。现在先精确定位这一个
+        # 元素，扫描时只跳过它（它不是封面内容，也不能删），不再拿它当"到头
+        # 了"的信号；真正的终点交给 `following`（没有 following 就收到 body
+        # 末尾，只是路上跳过这一个元素）。
+        body_sectPr = document.element.body.find(qn("w:sectPr"))
         for child in document.element.body:
-            if child is following or child.tag == qn("w:sectPr"):
+            if child is following:
                 break
+            if child is body_sectPr:
+                continue
             cover_elements.append(child)
 
     collector = alerts if alerts is not None else AlertCollector()
@@ -413,13 +433,14 @@ def run(
     body_anchor = (document.paragraphs[body_start]
                    if body_start is not None
                    and 0 <= body_start < len(document.paragraphs) else None)
-    split_body_section(document, body_anchor)
+    body_section_index = split_body_section(document, body_anchor)
     split_pictures_out_of_captions(picture_caption_paragraphs, built_styles)
     header_rules = [dataclasses.replace(r, header_text=expand_header_tokens(r.header_text, session))
                     for r in preset.header_footer]
     apply_header_footer(
         document, header_rules, built_styles, preset.header_bottom_line,
-        (preset.header_line_extend_left_cm, preset.header_line_extend_right_cm))
+        (preset.header_line_extend_left_cm, preset.header_line_extend_right_cm),
+        body_section_index=body_section_index)
     refresh_toc_tab_stops(document, _toc_anchor(document))
     enable_field_update_on_open(document)
 

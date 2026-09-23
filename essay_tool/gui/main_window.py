@@ -74,7 +74,40 @@ DEVELOPER_WORDS = """@关于本工具
 
 # 「更新日志」弹窗正文（用户 2026-09-20 提供）。用 `_open_text_popup(markup=True)`：
 # `**…**` 加粗；以后的新版本追加在最前面。
-CHANGELOG_TEXT = """**V1.1.1 2026/9/22**
+CHANGELOG_TEXT = """**V1.1.2 2026/9/23**
+**1. 修复了如下问题：**
+（1）程序崩溃
+· 修复了设置文件或预设文件编码不是UTF-8时，每次启动都会崩溃的问题。
+· 修复了论文文件被设为“只读”时，导出必然失败的问题。
+（2）文档内容与格式
+· 修复了来源文档本身带有多个分节（比如使用学校官方模板）时，前置部分与正文的页眉页码规则套错节、部分页码不生效的问题。
+· 修复了WPS格式文档勾选“导出时删除封面”却不生效、且无任何提示的问题。
+· 修复了脚注相关设置写入位置在页眉页脚引用之前、顺序不规范的问题。
+· 修复了脚注“序号后空格”在半角、全角之间来回切换导出时，新旧空格一起保留、多出空白的问题。
+· 修复了参考文献自动编号少数情况下可能复用到格式不同的编号定义、或改指后层级未同步的问题。
+· 修复了导出空白模板时，正文段落间距因继承内部默认值而偏大的问题。
+（3）设置项与编号
+· 修复了只读论文自动清理过旧备份失败时，被误报为“备份失败”的问题（备份其实已经成功）。
+· 修复了导入后未点击“重新识别”、直接在Word里改过原文档再导出，内容会按旧位置错位排版且不提示的问题。
+· 修复了.txt文件导入后，导出时选择覆盖原.txt文件不会提示确认的问题（.docx本就会提示）。
+· 修复了结构页同一部件对应两行时，目录域/清单域指令会被重复插入两次的问题。
+· 修复了封面区域表格中含未接受的修订时，仍会被误报“未接受的修订”的问题。
+（4）识别与提示
+· 修复了点击“重新识别”或切换标题编号方案后，之前手动关闭的部件会被重新勾选的问题。
+· 修复了原文件被移动/改名导致“切换标题编号方案”失败后，状态未回滚、需要先切到另一方案才能重试的问题。
+（5）界面操作与显示
+· 修复了结构页把一行内容跨区拖动/互换位置后，该行文字消失、无法再操作的问题。
+· 修复了把标签行拖进另一个标签空位后，界面仍显示旧标签文字、与实际导出结果不一致的问题。
+· 修复了目录/清单域那一行本身不能拖动，却可以被别的行拖过去顶替掉的问题。
+· 修复了带“附录序号题名”标记的行被拖入空位后，标记消失的问题。
+· 修复了同一份说明/协议/样张等只读弹窗反复点击会叠出多个重复窗口的问题。
+· 修复了表格控件在特定情况下某一行会多出一截空白的问题。
+· 修复了窗口“还原”尺寸在较小分辨率的屏幕上会超出屏幕边界的问题。
+· 修复了“关于”页面几个查看说明的按钮遇到意外错误会导致程序崩溃的问题。
+· 修复了格式设置页按Esc键不会撤销当前编辑内容、而是当成确认接受的问题。
+**2.** 本次更新不涉及预设/Excel配置文件格式的改动，原有配置无需重新导入。
+
+**V1.1.1 2026/9/22**
 **1. 修复了如下问题：**
 （1）程序崩溃
 · 修复了原文件移动、改名后点击“重新识别”“切换编号方案”“设置封面范围”会导致程序崩溃和设置丢失的问题。
@@ -798,8 +831,14 @@ class MainWindow(tk.Tk):
         这里把占比从原来的 566/1380≈41% 提到约 46%。
         """
         sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
-        w = max(1380, min(int(sw * 0.82), sw - 80))
-        h = max(860, min(int(sh * 0.85), sh - 80))
+        # 1380×860 这个下限是给"正常大小的屏幕"托底的，不该比"别超出屏幕"这条
+        # 上限更硬——小屏（1366×768 这种常见笔记本分辨率，或者高缩放比下
+        # 换算出来的可用像素更小）以前会被这个下限直接顶穿屏幕边界，"还原"
+        # 窗口后一截露到屏幕外面（2026-09-22 审计揪出的）。改成下限、上限都
+        # 算完之后再夹一次上限，屏幕本身比下限还小时，退而求其次贴着屏幕
+        # 边界（`sw/sh - 80`），不再无条件顶到 1380×860。
+        w = min(max(1380, int(sw * 0.82)), sw - 80)
+        h = min(max(860, int(sh * 0.85)), sh - 80)
         # 默认最大化打开（用户 2026-09-20）：流程图侧栏按整块屏幕宽度算占比；
         # 上面的 w×h 是"还原"（取消最大化）之后的窗口尺寸。
         w_flow = sw
@@ -1912,7 +1951,18 @@ class MainWindow(tk.Tk):
             return None
 
     def _open_cover_zoom(self, img_name: str, title: str) -> None:
-        """样张大图：独立窗口，图按屏幕高限幅；点画面／Esc 关。"""
+        """样张大图：独立窗口，图按屏幕高限幅；点画面／Esc 关。
+
+        按 `img_name` 做单例（2026-09-22 审计揪出的：连点同一张样张会叠出
+        好几个一模一样的大图窗口）——不同样张各自独立，同一张重复点就唤醒。
+        """
+        zooms = self.__dict__.setdefault("_cover_zoom_popups", {})
+        existing = zooms.get(img_name)
+        if existing is not None and existing.winfo_exists():
+            existing.deiconify()
+            existing.lift()
+            existing.focus_set()
+            return
         path = COVER_ASSETS_DIR / img_name
         if not path.exists():
             self.status("封面样张加载失败：请先运行 tools\\make_cover_preview.py 生成样张。")
@@ -1929,6 +1979,7 @@ class MainWindow(tk.Tk):
             self.status("封面样张加载失败：请先运行 tools\\make_cover_preview.py 重新生成样张。")
             return
         win = tk.Toplevel(self)
+        zooms[img_name] = win
         win.title(f"{title} —— 样张")
         win.configure(bg="#4a4a4a")
         lbl = tk.Label(win, image=photo, bd=0, bg="#4a4a4a")
@@ -2102,6 +2153,11 @@ class MainWindow(tk.Tk):
         `markup=True`（协议弹窗用，2026-09-20）：行首 "@" 是居中加粗的大标题，
         `**…**` 之间的字加粗；其余排版不变（不缩进）。
 
+        跟规范/操作逻辑窗口一样按标题做单例（2026-09-22 审计揪出的：以前
+        这里每次都 `tk.Toplevel`，同一个按钮连点几下就叠出好几个一模一样
+        的只读窗口）——**不同标题**（开发者的话/更新日志/协议/某份许可证
+        原文……）各自独立，同一个标题重复打开就唤醒已有的那扇，不再叠。
+
         `font_size` 只影响正文，标题字号跟着同比例放大，不传就是原来的大小。
         这里原来还有一个 `center: bool = True` 参数，2026-09-15 审计核实：**全仓
         0 个调用点传它**（历史遗留——“二级窗口不允许在屏幕左上角弹出”，现在一律
@@ -2112,7 +2168,15 @@ class MainWindow(tk.Tk):
         （用户 2026-09-19 实拍“每一条的 1. 2. 后换行”），所以正文先按窗口
         宽度折好再插进 Text，窗口尺寸变了重排一次。
         """
+        popups = self.__dict__.setdefault("_text_popups", {})
+        existing = popups.get(title)
+        if existing is not None and existing.winfo_exists():
+            existing.deiconify()
+            existing.lift()
+            existing.focus_set()
+            return
         win = tk.Toplevel(self)
+        popups[title] = win
         win.title(title)
         win.configure(bg=C_PANEL)
         win.geometry(f"{width}x{height}")
@@ -2247,8 +2311,15 @@ class MainWindow(tk.Tk):
 
     def on_open_logic(self) -> None:
         """打开「工具操作逻辑」说明，跟查阅《规范》原文一样是左树右文的结构。"""
-        from essay_tool.gui.logic_viewer import open_logic_viewer
-        open_logic_viewer(self, OPERATION_LOGIC_TEXT)
+        try:
+            from essay_tool.gui.logic_viewer import open_logic_viewer
+            open_logic_viewer(self, OPERATION_LOGIC_TEXT)
+        except Exception as exc:                  # noqa: BLE001
+            # 以前这里连 import 都不在 try 里、开窗调用更是完全没兜底，出了
+            # 意外异常会一路冒到顶层崩溃弹窗（2026-09-22 审计揪出的：跟《规范》
+            # 浏览按钮不是同一个标准）。改成跟「关于」页其它几个开窗按钮一样，
+            # 失败了只在状态栏说一句，不崩程序。
+            self.status(f"操作逻辑说明打开失败：{exc}")
 
     def on_open_recognition_rules(self) -> None:
         """结构页底栏「查阅识别规则」——**跟关于页的「查阅本工具操作逻辑说明」
@@ -2259,19 +2330,22 @@ class MainWindow(tk.Tk):
         那三张表所在的小节）——`anchor="3.6"`；窗口已经开着时会在那个窗口里
         就跳过去（见 `open_logic_viewer`）。
         """
-        from essay_tool.gui.logic_viewer import open_logic_viewer
-        open_logic_viewer(self, OPERATION_LOGIC_TEXT, anchor="3.6")
+        try:
+            from essay_tool.gui.logic_viewer import open_logic_viewer
+            open_logic_viewer(self, OPERATION_LOGIC_TEXT, anchor="3.6")
+        except Exception as exc:                  # noqa: BLE001
+            self.status(f"识别规则说明打开失败：{exc}")
 
     def on_open_spec(self) -> None:
         """「关于」里的《规范》原文浏览按钮（复用 spec_viewer，重复点会唤醒）。"""
         try:
             from essay_tool.gui.spec_viewer import open_spec_viewer
-        except Exception as exc:
+            open_spec_viewer(self)
+        except Exception as exc:                  # noqa: BLE001
+            # 以前只有 import 语句包在 try 里，`open_spec_viewer(self)` 这次
+            # 真正的开窗调用在 try 外面——它内部还会再打开文档校验完整性，
+            # 一样可能抛意外异常，抛出来同样没人接（2026-09-22 审计揪出的）。
             self.status(f"规范浏览窗口打开失败：{exc}")
-            return
-        win = open_spec_viewer(self)
-        if win is not None:
-            return
 
     def on_save_official_spec(self) -> None:
         """「关于」里的「另存官方版」：把《规范》原始文件另存一份（不是从网上下载）。"""
@@ -2310,10 +2384,11 @@ class MainWindow(tk.Tk):
         """
         try:
             from essay_tool.gui.spec_viewer import open_star10_viewer
-        except Exception as exc:
+            open_star10_viewer(self)
+        except Exception as exc:                  # noqa: BLE001
+            # 同 `on_open_spec`：以前真正的开窗调用在 try 外面，没接住
+            # （2026-09-22 审计揪出的）。
             self.status(f"格式要求打开失败：{exc}")
-            return
-        open_star10_viewer(self)
 
     def on_save_official_star10(self) -> None:
         """「关于」里学术十星那行的「另存官方版」：把格式要求原件另存一份。"""
@@ -3800,10 +3875,21 @@ class MainWindow(tk.Tk):
         scheme = self.var_heading_scheme.get()
         if scheme == self._heading_scheme_applied:
             return
-        self._heading_scheme_applied = scheme
+        previous = self._heading_scheme_applied
         inst = self._adjust_instance
+        applied = True
         if inst is not None and inst.doc_path is not None and inst.doc_path == self.doc_path:
-            inst.set_heading_scheme(scheme)
+            applied = inst.set_heading_scheme(scheme)
+        if not applied:
+            # 切换没成功（比如原文件被移动/改名了）：状态和单选都退回切换
+            # 之前的样子，不写"已切换"——不然界面显示切成了、`_heading_
+            # scheme_applied` 也记成了新方案，但结构页其实还停在旧方案，
+            # 而且因为"没变化"再点同一个选项也不会重试（2026-09-22 审计）。
+            self._heading_scheme_applied = previous
+            self.var_heading_scheme.set(previous)
+            self._sync_scheme_checks()
+            return
+        self._heading_scheme_applied = scheme
         self.status("已切换原文标题序号："
                     + ("中文序号" if scheme == "chinese" else "阿拉伯数字序号"))
         # 本来就站在「结构」页签上的话，识别结果变了，告警也得重报一遍
@@ -3853,19 +3939,26 @@ class MainWindow(tk.Tk):
         """
         if not self.gui_settings.backup_enabled:
             return ""
+        from essay_tool.engine.loader import backup_import, prune_backups
+        backup_dir = self._effective_backup_dir()
+        # 备份和清理分开各自 try：以前共用一个 try/except，备份其实成功了、
+        # 只是后面的自动清理失败（比如某份旧备份只读删不掉），却被报成
+        # "备份原文件失败"，用户会误以为这次备份根本没做（2026-09-22 审计
+        # 揪出的：文案跟实际失败的步骤对不上）。
         try:
-            from essay_tool.engine.loader import backup_import, prune_backups
-            backup_dir = self._effective_backup_dir()
             dest = backup_import(path, backup_dir)
-            note = f"已经备份原文件到 {dest}"
-            if self.gui_settings.backup_auto_prune:
+        except OSError as exc:
+            return f"备份原文件失败：{exc}（不影响导入）"
+        note = f"已经备份原文件到 {dest}"
+        if self.gui_settings.backup_auto_prune:
+            try:
                 removed = prune_backups(backup_dir, self.gui_settings.backup_keep_count,
                                         self.gui_settings.backup_keep_unit)
                 if removed:
                     note += f"（已清理 {removed} 份过旧备份）"
-            return note
-        except OSError as exc:
-            return f"备份原文件失败：{exc}（不影响导入）"
+            except OSError as exc:
+                note += f"；清理过旧备份失败：{exc}（备份本身已成功，不影响导入）"
+        return note
 
     def _builtin_preset_names(self) -> set[str]:
         """内置配置的名字（含还没落盘的「课程考核（待创建）」）。
@@ -4285,6 +4378,19 @@ class MainWindow(tk.Tk):
         if (inst is None or self.doc_path is None or inst.doc_path != self.doc_path
                 or inst.confirmed_index is None):
             return None
+        # `confirmed_index` 是按**上次识别那一刻**的磁盘文件换算出来的——如果
+        # 导入之后没点"重新识别"，直接在 Word 里增删了段落又导出，以前这里
+        # 什么都不比，`doc_index.build_ops`/`rebuild_body` 会拿旧的段落下标去
+        # 配新文档，内容按错位的邻居段搬运、多出来的条目静默丢掉，不报错也
+        # 不提示（2026-09-22 审计揪出的："导出前比对拦截"当时确实没做）。这里
+        # 补上这道拦截：磁盘上的文件跟"上次识别"时的指纹对不上，直接拒绝
+        # 导出，让用户先点"重新识别"。
+        from essay_tool.gui.adjust_preview import _file_fingerprint
+        if _file_fingerprint(self.doc_path) != inst.confirmed_fingerprint:
+            raise RuntimeError(
+                "原文件在上一次「重新识别」之后又被改动过（比如在 Word 里增删过段落），"
+                "论文结构页的识别结果已经跟磁盘上的文件对不上号了。"
+                "请先在「论文结构」页点「重新识别」，确认无误后再导出。")
         try:
             from docx import Document as _Document
             from essay_tool.engine.cleanup import unwrap_section_break_sdt
@@ -4378,7 +4484,18 @@ class MainWindow(tk.Tk):
         # 那一步就是**覆盖掉原稿**，而用户点的是"导出"。备份目录里那份是导入
         # 时的快照，但没人该在导出这一步丢掉原稿。
         try:
-            same_file = out_path.resolve() == self.doc_path.resolve()
+            resolved_out = out_path.resolve()
+            # `self.doc_path` 对 .docx 导入就是原文件路径，但 .txt 导入会被
+            # 换成 `load_as_working_copy` 生成的工作区 docx 路径（原 .txt
+            # 从来不会被赋给 `self.doc_path`）——只比 `self.doc_path` 的话，
+            # 导出时选回那份原始 .txt 并覆盖，这里比不出"是同一份文件"，
+            # 直接把 docx 二进制写了进去，没有任何提示；.docx 导入走的是
+            # 同一段代码，同类操作却会被正确拦住（2026-09-22 审计揪出的
+            # 真 bug）。`self.src_path` 记的是导入时用户实际选的那份文件，
+            # 一并比一下。
+            same_file = resolved_out == self.doc_path.resolve()
+            if not same_file and self.src_path is not None:
+                same_file = resolved_out == self.src_path.resolve()
         except OSError:
             same_file = False
         if same_file and not messagebox.askyesno(

@@ -687,10 +687,20 @@ def build_ops(rows, index: list[Entry], *, enabled=None,
             ops.append(Op("copy", entry=entry))
             emitted.add(entry.top_index)
 
+    fields_emitted: set[str] = set()
+
     def add_fields(part: str | None) -> None:
-        """某一行的后面要不要跟域指令（目录／清单）。"""
-        if not part:
+        """某一行的后面要不要跟域指令（目录／清单）。
+
+        同一个部件在面板上占了两行时（重复的标签行，或"插入空位"让空位
+        继承了同一个部件），两行各自的回合都会调用这里——以前没有"这个
+        部件的域已经发过"这道判断，域指令会跟着发两遍，成品里就出现两个
+        【目录】/两条目录域（2026-09-22 审计揪出的）。一个部件的域只该
+        在整份成品里出现一次，用 `part` 去重。
+        """
+        if not part or part in fields_emitted:
             return
+        fields_emitted.add(part)
         if part == "目录" and insert_toc:
             ops.append(Op("generate", part=part, kind="toc_field"))
         for kind in ("图", "表"):        # 规范 [91]：分开列时插图清单在前

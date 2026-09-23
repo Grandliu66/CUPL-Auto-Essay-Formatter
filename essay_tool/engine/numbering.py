@@ -67,6 +67,16 @@ def _level_text(abstract, level: str = "0") -> str | None:
     return None
 
 
+def _level_attr(abstract, tag: str, level: str = "0") -> str | None:
+    """第 `level` 层某个子元素（`w:numFmt`/`w:start`……）的 `w:val`。"""
+    for element in abstract.findall(qn("w:lvl")):
+        if element.get(qn("w:ilvl")) != level:
+            continue
+        child = element.find(qn(tag))
+        return child.get(qn("w:val")) if child is not None else None
+    return None
+
+
 def _next_free_id(numbering) -> int:
     """挑一个没被占用的 id。`w:numId="0"` 是"这一段没有编号"的保留值，避开。"""
     used: set[int] = set()
@@ -197,12 +207,20 @@ def copy_level_indent(document, from_num_id: int, to_num_id: int) -> None:
             continue
         if level.find(qn("w:pPr")) is not None:
             return                      # 已经有了，别覆盖
-        # lvl 的子元素顺序：start, numFmt, lvlText, lvlJc, pPr, rPr
+        # lvl 的子元素顺序：start, numFmt, lvlText, lvlJc, pPr, rPr——pPr 必须
+        # 排在 rPr 前面。以前 `lvlJc` 不存在时直接 `level.append(...)`，如果
+        # 这一层恰好已经有 `rPr`（没有 `lvlJc`、只有 `rPr`），pPr 会被摆到
+        # rPr 后面，顺序就反了（2026-09-22 审计揪出的）。改成找不到 `lvlJc`
+        # 就退一步找 `rPr`，插到它前面；两个都没有才真的直接 append。
         lvl_jc = level.find(qn("w:lvlJc"))
         if lvl_jc is not None:
             lvl_jc.addnext(copy.deepcopy(pPr))
         else:
-            level.append(copy.deepcopy(pPr))
+            rPr = level.find(qn("w:rPr"))
+            if rPr is not None:
+                rPr.addprevious(copy.deepcopy(pPr))
+            else:
+                level.append(copy.deepcopy(pPr))
         return
 
 
@@ -248,7 +266,15 @@ def ensure_reference_numbering(document, style: str | None = None,
         if reference is None:
             continue
         abstract = abstracts.get(reference.get(qn("w:val")))
-        if abstract is not None and _level_text(abstract) == wanted:
+        if abstract is None or _level_text(abstract) != wanted:
+            continue
+        # 光比 lvlText 模板不够——`_build_reference_abstract` 造出来的定义固定是
+        # `numFmt=decimal`、`start=1`；外部已有的定义恰好用了同一套写法（比如
+        # `%1.`）但编号方式或起始值不同（罗马数字、字母编号、从别的数起），
+        # lvlText 单看字符串会一样，误判成"能复用"就会套错编号
+        # （2026-09-22 审计揪出的）。三项都对得上才真的能直接复用。
+        if (_level_attr(abstract, "w:numFmt") == "decimal"
+                and _level_attr(abstract, "w:start") == "1"):
             return int(existing_id)
 
     new_id = _next_free_id(numbering)

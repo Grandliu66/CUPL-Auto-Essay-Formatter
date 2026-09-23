@@ -330,10 +330,20 @@ class AlertCollector:
             # 段号列本来也没有对应的行。
             in_cover = 0
             if cover_end is not None:
-                in_cover = sum(
-                    len(p._p.findall(f".//{qn('w:ins')}"))
-                    + len(p._p.findall(f".//{qn('w:del')}"))
-                    for i, p in enumerate(document.paragraphs) if i <= cover_end)
+                # 按 body 顶层元素数封面范围，不能只看 `document.paragraphs`——
+                # 那份列表不含表格单元格里的段落，封面里放了一张带修订的表格
+                # 时，`total`（扫全篇 XML）能数到、这里数不到，`total != in_cover`
+                # 就误报"未接受的修订"（2026-09-22 审计揪出的：跟"封面内不管"
+                # 的口径矛盾）。改成跟 `cleanup.cover_top_limit` 同一套口径，
+                # 直接数 body 顶层"封面范围内的元素"底下的全部修订（含表格）。
+                from essay_tool.engine.cleanup import cover_top_limit
+                limit = cover_top_limit(document, cover_end)
+                if limit is not None:
+                    kids = list(body.iterchildren())
+                    in_cover = sum(
+                        len(child.findall(f".//{qn('w:ins')}"))
+                        + len(child.findall(f".//{qn('w:del')}"))
+                        for child in kids[:limit])
             if total == in_cover:
                 return
             self.add("revision_marks", "未接受的修订", "修订", "请先接受修订")

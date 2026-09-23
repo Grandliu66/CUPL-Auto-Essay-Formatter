@@ -216,9 +216,17 @@ def _ensure_trailing_space(paragraph, space: str) -> None:
             continue  # 不是文字 run（比如另一个域），继续往后找
         current = text.text or ""
         if space:
-            if not current.startswith(space):
-                break     # 没有想要的这种空格：走到下面去补一个
-            return        # 已经是想要的样子，幂等不动
+            if current.startswith(space):
+                return        # 已经是想要的样子，幂等不动
+            for known in _KNOWN_MARKER_SPACES:
+                if current.startswith(known):
+                    # 是我们认识的另一种空格（半角/全角来回切换时宽度不对）：
+                    # 先摘掉，下面再插入想要的那种——以前不摘就直接往下插
+                    # 新的一个，旧的那个还留着，序号后面就变成两个空格宽
+                    # （2026-09-22 审计揪出的真 bug）。
+                    text.text = current[len(known):]
+                    break
+            break     # 没有想要的这种空格：走到下面去补一个
         for known in _KNOWN_MARKER_SPACES:
             if current.startswith(known):
                 text.text = current[len(known):]
@@ -283,7 +291,18 @@ def normalize_footnotes(document, style_id: str, citation,
         props = sect_pr.find(qn("w:footnotePr"))
         if props is None:
             props = etree.Element(qn("w:footnotePr"))
-            sect_pr.insert(0, props)  # 必须排在 EG_SectPrContents 的最前面
+            # EG_SectPrContents 的顺序是 headerReference*、footerReference*、
+            # footnotePr?、endnotePr?、……——footnotePr 排在页眉页脚引用
+            # 之后，不是最前面。以前无条件 insert(0, ...)：这一节本来就有
+            # 页眉/页脚引用时，写完顺序就反了（Word 有可能因此不认这条
+            # 脚注设置，2026-09-22 审计发现的）。这里改成插在最后一个
+            # headerReference/footerReference 之后（没有就还是最前面，
+            # 跟以前没有页眉页脚引用时的行为一致）。
+            insert_pos = 0
+            for i, child in enumerate(sect_pr):
+                if child.tag in (qn("w:headerReference"), qn("w:footerReference")):
+                    insert_pos = i + 1
+            sect_pr.insert(insert_pos, props)
         _set_ftn_prop(props, "w:numFmt", number_format)
         if citation.footnote_restart_each_page:
             _set_ftn_prop(props, "w:numRestart", "eachPage")
