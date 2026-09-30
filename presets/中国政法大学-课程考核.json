@@ -594,7 +594,7 @@
   "header_footer": [
     {
       "section_name": "前置部分(摘要起至目录)",
-      "header_text": "中 国 政 法 大 学 本 科 生 毕 业 考 核",
+      "header_text": "中 国 政 法 大 学 本 科 生 课 程 考 核",
       "page_number_enabled": "是",
       "page_number_format": "upperRoman",
       "page_number_prefix": "",
@@ -602,7 +602,7 @@
     },
     {
       "section_name": "正文部分(引言起)",
-      "header_text": "中 国 政 法 大 学 本 科 生 毕 业 考 核",
+      "header_text": "中 国 政 法 大 学 本 科 生 课 程 考 核",
       "page_number_enabled": "是",
       "page_number_format": "decimal",
       "page_number_prefix": "",
