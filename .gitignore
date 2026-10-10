@@ -52,5 +52,12 @@ tools/strip_bom.py
 .continue/
 
 # ---- 开发参考资料：含用户本人真实稿件、内部设计草稿；本地留着给 AAT/开发用，不进公开仓库
-reference/
+# （例外：下面 5 份学校官网公开的官方文件是程序运行必需的——封面生成、《规范》查看都要读——
+#  必须随源码一起提供，哈希见 essay_tool/config/integrity_hashes.py）
+reference/*
+!reference/中国政法大学本科生毕业论文写作模板.docx
+!reference/中国政法大学本科生课程考核封面.docx
+!reference/附件七：第二十四届“学术十星”论文大赛论文封面范例.docx
+!reference/中国政法大学本科毕业论文撰写格式规范.docx
+!reference/附件二 ：第二十四届“学术十星”论文大赛参赛作品撰写格式.pdf
 docs/
