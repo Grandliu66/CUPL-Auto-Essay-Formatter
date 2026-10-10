@@ -11,6 +11,10 @@
 - 人工校对：提供图形界面供用户在自动识别结果的基础上手动调整标题层级、封面范围等设置，确认后再执行排版。
 - 原文件保护：所有修改均在原文件的副本上进行，不直接改动用户提供的原始文件。
 
+## 下载安装
+
+面向普通用户的安装包发布在 [Releases](https://github.com/Grandliu66/CUPL-Auto-Essay-Formatter/releases/latest) 页面：下载附件 `CUPL-UTAF V<版本>.exe`，双击安装即可。各版本的更新内容见 Releases 页面和根目录的 `CHANGELOG.txt`。
+
 ## 系统要求
 
 - Windows 10 或更高版本。
@@ -19,21 +23,33 @@
 ## 从源码运行
 
 ```
-git clone https://github.com/Grandliu66/CUPL-Essay-Auto-Formatter.git
-cd CUPL-Essay-Auto-Formatter
+git clone https://github.com/Grandliu66/CUPL-Auto-Essay-Formatter.git
+cd CUPL-Auto-Essay-Formatter
 pip install -r requirements.txt
 python main.py
 ```
 
-本仓库提供的是源代码。面向普通用户的安装包（双击即可安装使用的 exe）由 `packaging` 目录下的脚本单独构建，不包含在本仓库中。
+仓库不包含学校的官方文件（封面模板、格式规范等，随安装包分发）。从源码运行时，如需使用封面生成、《规范》和学术十星格式要求的查看功能，请把下列文件放进项目根目录下的 `reference/` 文件夹（缺少时只有这几项功能不可用，其余功能不受影响）：
+
+- `中国政法大学本科生毕业论文写作模板.docx`
+- `中国政法大学本科生课程考核封面.docx`
+- 文件名含“学术十星”和“封面”的封面范例 `.docx`（如《附件七：第二十四届“学术十星”论文大赛论文封面范例.docx》）
+- `中国政法大学本科毕业论文撰写格式规范.docx`
+- 文件名含“学术十星”的格式要求 `.pdf`（如《附件二：第二十四届“学术十星”论文大赛参赛作品撰写格式.pdf》）
+
+这些文件的 SHA-256 校验值记录在 `essay_tool/config/integrity_hashes.py`，与官方版本不一致的文件会被拒绝使用。
+
+安装包由 `packaging/build.ps1` 构建（需要 Python 3.13 和 Inno Setup 6），构建产物不进入仓库。
 
 ## 目录结构
 
+- `main.py`：程序入口；`python main.py --selftest <结果文件>` 可做不弹窗的自检。
 - `essay_tool/`：核心代码，包含排版引擎（`engine/`）、图形界面（`gui/`）和配置解析（`config/`）。
-- `presets/`：内置的排版规范预设。
+- `presets/`：内置的排版规范预设（JSON，另附本科毕业论文的 Excel 版）。
 - `packaging/`：打包为 Windows 安装程序所需的脚本与配置。
 - `Adversarial Automatic Test/`：面向排版引擎的自动化对抗测试框架。
-- `tools/`：开发和维护过程中使用的辅助脚本。
+- `tools/`：预设生成与同步、封面样张烘焙、官方文件校验值更新等维护脚本。
+- `samples/`：示例文本。
 
 ## 声明
 

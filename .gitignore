@@ -24,6 +24,29 @@ Adversarial Automatic Test/_*.py
 !Adversarial Automatic Test/_rerun_all.py
 !Adversarial Automatic Test/_check_alerts_edge.py
 
+# ---- 一次性/按日期的开发脚本与本机备份工具（本地留存，不进公开仓库）
+tools/check_*_2026*.py
+tools/audit_readonly*.py
+tools/backup_snapshot.py
+tools/check_revert_risk.py
+tools/crash_demo.py
+tools/edit_logic_sheet.py
+tools/edit_outline_round5.py
+tools/fill_outline_sheet2.py
+tools/fix_number_spacing.py
+tools/make_outline_xlsx.py
+tools/rebuild_outline_sheet2.py
+tools/renumber_outline.py
+tools/repair_main_window.py
+tools/restore_from_local_history.py
+tools/purge_orphan_editing_sessions.py
+tools/strip_bom.py
+备份.cmd
+
+# ---- 根目录下随手放的压缩包/PDF（与源码无关）
+/*.zip
+/*.pdf
+
 # ---- 编辑器/AI 工具本地状态，与项目无关
 .vscode/tasks.json
 .continue/
