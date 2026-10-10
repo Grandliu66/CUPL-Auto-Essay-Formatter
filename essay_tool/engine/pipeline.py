@@ -79,7 +79,7 @@ from essay_tool.engine.sections import (
     expand_header_tokens,
     split_body_section,
 )
-from essay_tool.engine.styles import StyleRegistry, refresh_toc_tab_stops
+from essay_tool.engine.styles import StyleRegistry, drop_null_numbering, refresh_toc_tab_stops
 
 DEFAULT_PRESET = pathlib.Path("presets/中国政法大学-本科毕业论文.json")
 
@@ -330,6 +330,7 @@ def run(
         if has_toc_field(paragraph) or is_toc_paragraph(paragraph):
             continue
         paragraph.style = normal_style
+        drop_null_numbering(paragraph)
 
     normalize_image_paragraphs(document, skip_indices=cover_indices)
 

@@ -261,6 +261,15 @@ def _get_or_add_style(document: DocumentObject, spec: ParagraphStyleSpec) -> Bas
         except KeyError:
             style = styles.add_style(target_name, WD_STYLE_TYPE.PARAGRAPH)
 
+    if builtin_name is not None:
+        # Word 内置名的样式不能带 `w:customStyle="1"`（"自定义样式"标记）：`add_style`
+        # 新建出来的 `toc 1/2/3` 默认带着它，Word 刷新目录域时认不出这是内置的
+        # 「目录 1」，转而用自己的默认定义（基于正文：四号 + 首行缩进 2 字符），预设里
+        # 写的"小四、无缩进"全落空——成品里目录条目与预设不符（用户 2026-10-11 反馈，
+        # 本机 Word 实测复现：去掉这个标记后目录条目就按我们的定义排）。
+        # 旧版工具导出过的文档里已经带着这个标记的，一并摘掉。
+        style.element.attrib.pop(qn("w:customStyle"), None)
+
     if builtin_name is not None and target_name in _RENAME_TO_SPEC_NAME:
         style.name = spec.name
 
@@ -418,8 +427,59 @@ def refresh_toc_tab_stops(document, anchor) -> None:
             tab.set(qn("w:pos"), str(pos))
 
 
+def _drop_line_based_spacing(pPr, spec: ParagraphStyleSpec) -> None:
+    """预设写了段前/段后（磅）时，摘掉同一处 `w:spacing` 上"按行/自动"的写法。
+
+    Word 里段前段后有两套互相覆盖的写法：磅（`w:before`/`w:after`）和行数
+    （`w:beforeLines`/`w:afterLines`，界面里写"0.5 行"），还有"自动"
+    （`w:beforeAutospacing`/`w:afterAutospacing`）。**后两者优先**。源文档里
+    的样式常常是行数写法（Word 里默认的标题样式就这样），python-docx 只写磅值、
+    不碰行数，成品里两个属性并存，Word 按行数算——预设写的 18 磅被源文档的
+    "0.5 行"盖掉（用户 2026-10-11 反馈：二级标题段前是 0.5 行而非 18 磅，本机
+    复现）。预设留空＝继承源文档的，那种情况保持不动。
+    """
+    spacing = pPr.find(qn("w:spacing")) if pPr is not None else None
+    if spacing is None:
+        return
+    # 不能只摘本处的属性：样式会**继承**基础样式（正文/源文档里的"正文"）的行数/自动写法，
+    # 本处不写就等于没盖掉（敌对夹具实测：标题样式基于带"段前自动"的正文，磅值读出来对、
+    # 但 Word 里段前段后显示"自动"）。所以显式写成 0 / 关闭，才压得住继承来的值。
+    if spec.space_before is not None:
+        spacing.set(qn("w:beforeLines"), "0")
+        spacing.set(qn("w:beforeAutospacing"), "0")
+    if spec.space_after is not None:
+        spacing.set(qn("w:afterLines"), "0")
+        spacing.set(qn("w:afterAutospacing"), "0")
+
+
+def drop_null_numbering(paragraph: Paragraph) -> None:
+    """摘掉段落上"明确不要编号"的 `w:numPr`（`numId="0"`）。
+
+    Word 里给一段"取消编号"会写成 `numPr/numId=0`，而且这一写，Word 连**样式里**写的
+    缩进也一并不认、按 0 算（本机实测：三级/四级标题预设的 0.85 厘米左缩进在这种段落上
+    读出来是 0）。工具管的角色样式本身不带编号（见 `apply_style_spec` 摘掉样式里的
+    编号），这个标记已经没有意义，只剩副作用，所以套样式时一并摘掉。
+    """
+    pPr = paragraph._p.find(qn("w:pPr"))
+    numPr = pPr.find(qn("w:numPr")) if pPr is not None else None
+    if numPr is None:
+        return
+    num_id = numPr.find(qn("w:numId"))
+    if num_id is not None and num_id.get(qn("w:val")) == "0":
+        pPr.remove(numPr)
+
+
 def apply_style_spec(document: DocumentObject, spec: ParagraphStyleSpec) -> BaseStyle:
     style = _get_or_add_style(document, spec)
+    # 样式本身不许带自动编号：标题编号工具是"固化成文字"处理的（`normalize`），源文档的
+    # 标题样式要是挂着多级编号（Word 模板里很常见），成品里就会"第1章 一、引言"双重编号
+    # （敌对夹具实测复现）。摘掉样式上的 `w:numPr`；参考文献等需要自动编号的，是段落上
+    # 直接挂的，不受影响。
+    style_pPr = style.element.find(qn("w:pPr"))
+    if style_pPr is not None:
+        style_numPr = style_pPr.find(qn("w:numPr"))
+        if style_numPr is not None:
+            style_pPr.remove(style_numPr)
 
     style.font.size = spec.size
     style.font.bold = spec.bold
@@ -433,6 +493,7 @@ def apply_style_spec(document: DocumentObject, spec: ParagraphStyleSpec) -> Base
     pf.alignment = spec.alignment
     pf.space_before = spec.space_before
     pf.space_after = spec.space_after
+    _drop_line_based_spacing(style.element.find(qn("w:pPr")), spec)
     pf.page_break_before = spec.page_break_before
 
     if spec.line_rule in _FIXED_RATIO_LINE_RULES:
@@ -511,6 +572,7 @@ def write_spec_onto_paragraph(paragraph: Paragraph, spec: ParagraphStyleSpec) ->
     pf.alignment = spec.alignment
     pf.space_before = spec.space_before
     pf.space_after = spec.space_after
+    _drop_line_based_spacing(paragraph._p.find(qn("w:pPr")), spec)
     pf.page_break_before = spec.page_break_before
     if spec.line_rule in _FIXED_RATIO_LINE_RULES:
         pf.line_spacing_rule = spec.line_rule
@@ -547,8 +609,10 @@ def apply_spec(paragraph: Paragraph, registry: "StyleRegistry", style_id: str) -
     base_id = _DIRECT_FORMAT_BASE.get(style_id)
     if base_id is None:
         paragraph.style = registry[style_id]
+        drop_null_numbering(paragraph)
         return
     paragraph.style = registry[base_id]
+    drop_null_numbering(paragraph)
     write_spec_onto_paragraph(paragraph, registry.spec(style_id))
 
 

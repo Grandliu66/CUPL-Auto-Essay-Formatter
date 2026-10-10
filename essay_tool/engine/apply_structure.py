@@ -50,6 +50,7 @@ from essay_tool.engine.placeholders import (
 )
 from essay_tool.engine.sections import (insert_toc_field_after, make_list_field,
                                         make_toc_field)
+from essay_tool.engine.normalize import keyword_label_gap
 from essay_tool.engine.recognize import split_inline_keyword
 from essay_tool.engine.styles import (StyleRegistry, apply_inline_label_content, apply_spec,
                                       write_spec_onto_paragraph)
@@ -814,10 +815,12 @@ def merge_keyword_paragraphs(document: DocumentObject, index: list[Entry], ops: 
                 or id(entry) not in ordinal_of):
             continue
         label_p = paragraphs[ordinal_of[id(entry)]]
-        label_text = label_p.text.strip()
-        if not label_text:
+        label_text = label_p.text
+        if not label_text.strip():
             continue
-        sep = keyword_label_separator(label_text)
+        # 标签段末尾已经带着预设要求的间隔（normalize 写进去的）就不再补
+        sep = "" if label_text != label_text.rstrip(" 　") else keyword_label_separator(
+            label_text.strip())
         for nxt in ops[k + 1:]:
             if nxt.action == "generate":
                 if nxt.part == entry.part and nxt.slot_col == "text":
@@ -854,10 +857,15 @@ def merge_keyword_paragraphs(document: DocumentObject, index: list[Entry], ops: 
 def _make_inline_keyword_paragraph(document: DocumentObject, label: str, content: str,
                                    styles: StyleRegistry, label_style_id: str,
                                    content_style_id: str) -> Paragraph:
-    """**造**一段"标签 + 关键词写在一起"的关键词段（规范：标签"其后是关键词"）。"""
+    """**造**一段"标签 + 关键词写在一起"的关键词段（规范：标签"其后是关键词"）。
+
+    `label` 可以带末尾的空格（预设「标签写法」里写的间隔，见
+    `normalize.keyword_label_gap`）：有就照用，没有才按 `keyword_label_separator` 补。"""
+    stripped = label.rstrip(" 　")
+    gap = label[len(stripped):] or keyword_label_separator(stripped)
     paragraph = Paragraph(OxmlElement("w:p"), document)
-    paragraph.add_run(label + keyword_label_separator(label) + content)
-    apply_inline_label_content(paragraph, styles, label_style_id, content_style_id, len(label))
+    paragraph.add_run(stripped + gap + content)
+    apply_inline_label_content(paragraph, styles, label_style_id, content_style_id, len(stripped))
     return paragraph
 
 
@@ -952,8 +960,8 @@ def build_part_paragraphs(
         if slot_col == "text":
             return [content]
         return [_make_inline_keyword_paragraph(
-            document, keywords, _ENGLISH_PLACEHOLDER_PROMPTS["英文关键词"],
-            styles, "S30", "S31")]
+            document, keywords + keyword_label_gap("英文关键词", insert_text),
+            _ENGLISH_PLACEHOLDER_PROMPTS["英文关键词"], styles, "S30", "S31")]
 
     if part == "英文题目":
         return [_make_paragraph(document, _ENGLISH_PLACEHOLDER_PROMPTS["英文题目"],

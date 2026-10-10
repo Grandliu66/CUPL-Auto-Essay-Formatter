@@ -19,6 +19,10 @@ r"""AAT 跑批入口：一条命令跑完所有层，**红了返回非 0 退出�
   9. `gen_exceptions.py` 例外层（3.6 表「允许的例外」机械切分 → 168 条样本 × 对拍）：
                          与写法层同口径（`✘分歧`/`？未判定` 就红）
  10. `gen_equiv.py`      等价层（写法等价对，产物必须逐字节一致）：`问题条数 > 0` 就红
+ 11. `aat_word_effective.py` Word 实测层（2026-10-11）：预设「格式」大表格每个角色×每个属性，
+                         让本机 Word 打开成品、读出**实际生效**的值再跟预设比；`问题条数 > 0`
+                         就红；本机没有 Word/pywin32 时**跳过标黄**；`--quick` 也跳过（要开 Word，
+                         约 2 分钟）
 
 另有一条**不进本跑批**的慢线（默认 4 进程，约 6 分钟；单进程 20 分钟）：
 `scan_all.py` —— 单因素扫描 × 全部夹具，产出"每个开关由哪些夹具触发"登记表。
@@ -138,6 +142,13 @@ def judge_generic(label: str, text: str) -> tuple[list[str], list[str]]:
     return ([f"{label} {number}"] if number else []), []
 
 
+def judge_word(text: str) -> tuple[list[str], list[str]]:
+    """Word 实测层：本机没有 Word 就是黄（没跑），不能静默变绿。"""
+    if "⚠️ 跳过" in text:
+        return [], [text.split("⚠️ 跳过：", 1)[-1].strip().splitlines()[0][:50]]
+    return judge_generic("Word 实测问题", text)
+
+
 def _crash_reason(text: str) -> str | None:
     """脚本自己没跑完（抛了异常）——必须红。
 
@@ -163,6 +174,7 @@ LAYERS: list[tuple[str, str, list[str], object]] = [
     ("断言层", "aat_asserts.py", [], lambda text: judge_generic("断言失败", text)),
     ("例外层", "gen_exceptions.py", ["--jobs", JOBS], judge_matrix),
     ("等价层", "gen_equiv.py", [], lambda text: judge_generic("等价问题", text)),
+    ("Word实测层", "aat_word_effective.py", [], judge_word),
 ]
 
 
@@ -175,7 +187,7 @@ def main(argv: list[str]) -> int:
     for name, script, args, judge in LAYERS:
         if only and only not in name:
             continue
-        if quick and script == "gen_pipeline.py":
+        if quick and script in ("gen_pipeline.py", "aat_word_effective.py"):
             print(f"—— {name}：--quick，跳过")
             continue
         print(f"—— {name}（{script}）跑起来了…")

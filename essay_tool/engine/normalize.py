@@ -233,6 +233,29 @@ def _label_replacement(part: str, insert_text: dict[str, str], current: str = ""
     return template
 
 
+_GAP_CHARS = " 　"
+
+
+def keyword_label_gap(part: str, insert_text: dict[str, str]) -> str:
+    """关键词「标签写法」**末尾的空格**——它就是标签与关键词之间要空的格数。
+
+    规范："【KEYWORDS】……后空两格编排"，学校模板的"【关键词】"后面也空两格
+    （用户 2026-10-11）。把这个间隔也交给「标签写法」管：预设里写成 `【关键词】␣␣`
+    （末尾两个空格）就空两格，写成全角空格就空两个全角，不写就不强加。其余标签
+    的写法照旧整格去掉首尾空白（`_label_text`），只有这两个部件认末尾空格。
+    """
+    if part not in ("关键词", "英文关键词"):
+        return ""
+    raw = insert_text.get(part) or ""
+    if part in _ENGLISH_LABEL_PARTS:
+        lines = [line for line in raw.splitlines() if line.strip()]
+        if not lines and part in _ENGLISH_LEGACY_FALLBACK:
+            return ""                      # 旧预设的回落写法没有间隔这回事
+        raw = lines[0] if lines else ""
+    stripped = raw.rstrip(_GAP_CHARS)
+    return raw[len(stripped):]
+
+
 def inline_keyword_text(part: str, insert_text: dict[str, str], raw: str) -> str | None:
     """关键词同段写法（`关键词：民法典；合同`）在成品里的文字：**只把开头的标签**
     换成预设那一格的写法，关键词一个字不碰。`raw` 不是同段写法返回 None。
@@ -249,7 +272,10 @@ def inline_keyword_text(part: str, insert_text: dict[str, str], raw: str) -> str
         return raw
     colon = raw[parts.label_end:parts.colon_end]
     space = raw[parts.colon_end:parts.rest_start]
-    if label.rstrip().endswith(("】", "]")):
+    gap = keyword_label_gap(part, insert_text)
+    if gap:
+        sep = gap                          # 预设写了间隔：以预设为准，不管用户原来是冒号还是空格
+    elif label.rstrip().endswith(("】", "]")):
         sep = space
     else:
         sep = colon + space or " "
@@ -312,6 +338,9 @@ def normalize_document(
             replacement = _label_replacement(part, insert_text, paragraph.text)
             if not replacement:
                 continue  # 用户在 Excel 里把这格清空了，保持原样
+            # 关键词单独成段的老写法：标签段末尾带上预设要求的间隔，后面并入关键词时
+            # 就按它空格（见 `apply_structure.merge_keyword_paragraphs`）。
+            replacement += keyword_label_gap(part, insert_text)
             _splice_prefix(paragraph, len(paragraph.text), replacement)
 
     for idx, prefix in (auto_bodies or {}).items():

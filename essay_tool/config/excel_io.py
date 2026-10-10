@@ -253,6 +253,11 @@ def _build_structure_parts(ws: Worksheet, header_cols, data_rows
     for r in data_rows:
         name = _raw(ws, r, header_cols, "部件")
         text = _raw(ws, r, header_cols, "插入文字")
+        if name in ("关键词", "英文关键词") and text:
+            # 这两个部件的写法末尾的空格是"标签与关键词之间的间隔"（见
+            # `normalize.keyword_label_gap`），读入时不能随首尾空白一起去掉。
+            full = str(_cell(ws, r, header_cols, "插入文字")[0])
+            text += full[len(full.rstrip(" 　")):]
         if pb_col is not None:
             raw_pb = ws.cell(row=r, column=pb_col).value
             raw_pb = "" if raw_pb is None else str(raw_pb).strip()
