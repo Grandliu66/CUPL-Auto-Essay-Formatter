@@ -10,6 +10,8 @@ Normal/Heading 1-4（这样目录域、导航窗格、大纲级别才认得出�
 
 from __future__ import annotations
 
+import copy
+
 from docx.document import Document as DocumentObject
 from docx.enum.style import WD_STYLE_TYPE
 from docx.enum.text import WD_LINE_SPACING
@@ -548,6 +550,67 @@ def apply_spec(paragraph: Paragraph, registry: "StyleRegistry", style_id: str) -
         return
     paragraph.style = registry[base_id]
     write_spec_onto_paragraph(paragraph, registry.spec(style_id))
+
+
+def _split_run_at(paragraph: Paragraph, offset: int) -> None:
+    """让段落文字的第 `offset` 个字符落在 run 边界上（必要时把一个 run 劈成两个）。
+
+    只劈"只装普通文字"的 run（`w:rPr` + `w:t`）：带图形、域、脚注引用的 run 劈开会
+    把那些东西复制成两份，宁可不劈（这一整个 run 算在前一段里）。劈出来的两半
+    共用原 run 的字符格式，所以文字外观不变。
+    """
+    if offset <= 0:
+        return
+    pos = 0
+    for run_el in paragraph._p.iter(qn("w:r")):
+        run = Run(run_el, paragraph)
+        text = run.text
+        end = pos + len(text)
+        if pos < offset < end:
+            kids = [k for k in run_el if k.tag != qn("w:rPr")]
+            if len(kids) == 1 and kids[0].tag == qn("w:t"):
+                cut = offset - pos
+                tail_el = copy.deepcopy(run_el)
+                run_el.addnext(tail_el)
+                for el, piece in ((run_el, text[:cut]), (tail_el, text[cut:])):
+                    t = el.find(qn("w:t"))
+                    t.text = piece
+                    if piece != piece.strip():
+                        t.set("{http://www.w3.org/XML/1998/namespace}space", "preserve")
+            return
+        if end >= offset:
+            return
+        pos = end
+
+
+def apply_inline_label_content(paragraph: Paragraph, registry: "StyleRegistry",
+                               label_style_id: str, content_style_id: str,
+                               label_len: int) -> None:
+    """**标签和内容写在同一段里**（关键词：`【关键词】民法典；合同`）的套格式。
+
+    规范原文：中文"【关键词】……其后是关键词"、英文"【KEYWORDS】……后空两格编排"，
+    一段里两种字体（用户 2026-10-10 纠正：此前一直当成"标签一段、内容一段"）。
+    做法：
+      * **整段先按标签样式**套（段落级的对齐、缩进、段前段后、行距，字体字号加粗
+        也先写满全段）——用户 2026-10-10 定：同段时**用关键词标签的间距**，
+        覆盖内容样式自己的间距；
+      * 再把第 `label_len` 个字符之后的 run 改写成**内容样式的字体字号加粗**
+        （段落级属性一律不动）。
+    `label_len`：段落文字开头多少个字符属于标签（含方括号，不含后面的冒号/空白）。
+    """
+    apply_spec(paragraph, registry, label_style_id)
+    if label_len >= len(paragraph.text):
+        return
+    _split_run_at(paragraph, label_len)
+    content = registry.spec(content_style_id)
+    pos = 0
+    for run_el in paragraph._p.iter(qn("w:r")):
+        run = Run(run_el, paragraph)
+        if pos >= label_len:
+            run.font.size = content.size
+            run.font.bold = content.bold
+            _set_fonts(run_el.get_or_add_rPr(), content.font_ascii, content.font_east_asian)
+        pos += len(run.text)
 
 
 class StyleRegistry:

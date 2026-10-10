@@ -6,9 +6,11 @@
 接收调用方（现在是 pipeline.py，直接传识别结果；以后是 GUI 调整完的
 结果）传进来的方案，方便以后在识别和应用之间插入调整环节而不用动这里。
 
-摘要/关键词（含英文 Abstract/Keywords）是"标签独占一段，内容从下一段
-开始写，直到下一个已识别的标题/标签为止"——用测试文件验证过，标签和
-内容不会挤在同一段里，摘要和关键词是同一种模式，不用分两套逻辑。目录
+摘要（含英文 Abstract）是"标签独占一段，内容从下一段开始写，直到下一个
+已识别的标题/标签为止"。**关键词（含英文 Keywords）不同**（2026-10-10 用户
+纠正，规范原文是"【关键词】……其后是关键词"）：标签和关键词写在**同一段**
+（`Entry.meta["inline"]`，格式见 `styles.apply_inline_label_content`）；
+标签单独成段、关键词在下一段的老写法仍照常识别、照旧按两段套格式。目录
 的"内容"是以后要生成的 TOC 域，不是现在要套格式的段落，这里不处理。
 """
 
@@ -48,7 +50,9 @@ from essay_tool.engine.placeholders import (
 )
 from essay_tool.engine.sections import (insert_toc_field_after, make_list_field,
                                         make_toc_field)
-from essay_tool.engine.styles import StyleRegistry, apply_spec, write_spec_onto_paragraph
+from essay_tool.engine.recognize import split_inline_keyword
+from essay_tool.engine.styles import (StyleRegistry, apply_inline_label_content, apply_spec,
+                                      write_spec_onto_paragraph)
 
 _LEVEL_STYLE_IDS = {1: "S02", 2: "S03", 3: "S04", 4: "S05"}
 
@@ -269,8 +273,16 @@ def apply_from_index(
             apply_spec(paragraphs[i], styles, _ANCHOR_STYLE_IDS[part])
             _apply_label_break(paragraphs[i], part, label_page_break)
         elif part in _LABEL_CONTENT_STYLE_IDS and slot == "label":
-            label_style_id, _content_style_id = _LABEL_CONTENT_STYLE_IDS[part]
-            apply_spec(paragraphs[i], styles, label_style_id)
+            label_style_id, content_style_id = _LABEL_CONTENT_STYLE_IDS[part]
+            inline = (split_inline_keyword(paragraphs[i].text, part)
+                      if entry.meta.get("inline") else None)
+            if inline is not None:
+                # 关键词的同段写法：标签和关键词在同一段里，标签样式管整段的段落
+                # 属性，关键词那截再换内容样式的字体（见 `apply_inline_label_content`）。
+                apply_inline_label_content(paragraphs[i], styles, label_style_id,
+                                           content_style_id, inline.label_end)
+            else:
+                apply_spec(paragraphs[i], styles, label_style_id)
             _apply_label_break(paragraphs[i], part, label_page_break)
         elif slot == "content" and part in _LABEL_CONTENT_STYLE_IDS:
             _label_style_id, content_style_id = _LABEL_CONTENT_STYLE_IDS[part]
@@ -767,6 +779,88 @@ def _make_paragraph(document: DocumentObject, text: str, styles: StyleRegistry,
     return paragraph
 
 
+def keyword_label_separator(label: str) -> str:
+    """关键词标签和关键词之间的分隔：标签以括号收尾（`【关键词】`）就紧挨着；
+    没有括号（学术十星的 `关键词`/`Key Words`）补一个空格，免得粘成"关键词民法典"。"""
+    return "" if label.rstrip().endswith(("】", "]")) else " "
+
+
+_INLINE_KEYWORD_PARTS = ("关键词", "英文关键词")
+
+
+def merge_keyword_paragraphs(document: DocumentObject, index: list[Entry], ops: list) -> list:
+    """把"标签一段、关键词在下一段"的老写法**合成一段**（规范："【关键词】……其后是
+    关键词"，用户 2026-10-10：导出时都要放在一行）。返回去掉了被并走的段落的
+    新指令表。
+
+    只处理标签单独成段（还不是同段写法）的关键词/英文关键词：
+      * 标签后面（指令表顺序里，中间只隔着空段）第一个有字的**同部件**段落，把它的
+        内容（run、超链接……除段落属性外的全部）搬进标签段，标签后按需补一个空格
+        （标签带括号就紧挨着，见 `keyword_label_separator`）；那一段不再进成品。
+        带分节符的段落不并；第二个及以后的有字段落仍按内容段单独成段。
+      * 标签后面没有任何内容、指令表又要生成"内容位占位语"：占位语直接并进标签段，
+        不再另起一段。
+    并完在标签上记 `meta["inline"]`，之后 `apply_from_index` 就按同段写法套格式。
+    **必须在 `apply_from_index` 之前调用**（文字已经被 `normalize_document` 改写
+    成规范标签之后），此时段落下标还是识别时的原样。
+    """
+    paragraphs = document.paragraphs
+    ordinal_of = {id(entry): o for o, entry in paragraph_ordinals(index).items()}
+    dropped: set[int] = set()                 # 要从指令表里去掉的指令（按 id）
+    for k, op in enumerate(ops):
+        entry = op.entry if op.action == "copy" else None
+        if (entry is None or entry.part not in _INLINE_KEYWORD_PARTS
+                or entry.meta.get("slot") != "label" or entry.meta.get("inline")
+                or id(entry) not in ordinal_of):
+            continue
+        label_p = paragraphs[ordinal_of[id(entry)]]
+        label_text = label_p.text.strip()
+        if not label_text:
+            continue
+        sep = keyword_label_separator(label_text)
+        for nxt in ops[k + 1:]:
+            if nxt.action == "generate":
+                if nxt.part == entry.part and nxt.slot_col == "text":
+                    # 内容位占位语：并进标签段（而不是另起一段）
+                    prompt = (_CONTENT_PLACEHOLDER_PROMPTS["关键词"] if entry.part == "关键词"
+                              else _ENGLISH_PLACEHOLDER_PROMPTS["英文关键词"])
+                    label_p.add_run(sep + prompt)
+                    dropped.add(id(nxt))
+                    entry.meta["inline"] = True
+                break
+            other = nxt.entry
+            if (nxt.action != "copy" or other is None or other.kind != "paragraph"
+                    or id(other) not in ordinal_of):
+                break
+            content_p = paragraphs[ordinal_of[id(other)]]
+            if not content_p.text.strip():
+                continue                      # 标签和内容之间的空段：跳过，原样保留
+            if other.part != entry.part:
+                break                         # 有字的、不属于这个部件的段落：到头了
+            pPr = content_p._p.find(qn("w:pPr"))
+            if pPr is not None and pPr.find(qn("w:sectPr")) is not None:
+                break                         # 带分节符的段落不能并走
+            if sep:
+                label_p.add_run(sep)
+            for child in list(content_p._p):
+                if child.tag != qn("w:pPr"):
+                    label_p._p.append(child)
+            dropped.add(id(nxt))
+            entry.meta["inline"] = True
+            break
+    return [op for op in ops if id(op) not in dropped]
+
+
+def _make_inline_keyword_paragraph(document: DocumentObject, label: str, content: str,
+                                   styles: StyleRegistry, label_style_id: str,
+                                   content_style_id: str) -> Paragraph:
+    """**造**一段"标签 + 关键词写在一起"的关键词段（规范：标签"其后是关键词"）。"""
+    paragraph = Paragraph(OxmlElement("w:p"), document)
+    paragraph.add_run(label + keyword_label_separator(label) + content)
+    apply_inline_label_content(paragraph, styles, label_style_id, content_style_id, len(label))
+    return paragraph
+
+
 def _make_field_paragraph(document: DocumentObject, kind: str) -> Paragraph:
     """**造**一个"清单域"段落（**只造、不定位**）；有意不套样式（同旧实现）。"""
     paragraph = Paragraph(OxmlElement("w:p"), document)
@@ -835,6 +929,10 @@ def build_part_paragraphs(
                                   styles, content_style_id)
         if slot_col == "text":
             return [content]
+        if part == "关键词":
+            return [_make_inline_keyword_paragraph(
+                document, insert_text.get(part) or part, _CONTENT_PLACEHOLDER_PROMPTS[part],
+                styles, label_style_id, content_style_id)]
         label = _make_paragraph(document, insert_text.get(part) or part,
                                 styles, label_style_id)
         return [label, content]
@@ -853,7 +951,9 @@ def build_part_paragraphs(
                                   styles, "S31")
         if slot_col == "text":
             return [content]
-        return [_make_paragraph(document, keywords, styles, "S30"), content]
+        return [_make_inline_keyword_paragraph(
+            document, keywords, _ENGLISH_PLACEHOLDER_PROMPTS["英文关键词"],
+            styles, "S30", "S31")]
 
     if part == "英文题目":
         return [_make_paragraph(document, _ENGLISH_PLACEHOLDER_PROMPTS["英文题目"],

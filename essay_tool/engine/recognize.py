@@ -149,16 +149,80 @@ def _english_keywords_pattern() -> re.Pattern[str]:
     return re.compile(r"^[【\[]?key[ 　]*words?[】\]]?$", re.IGNORECASE)
 
 
+# ---- 关键词的"同段写法"（2026-10-10 用户纠正：关键词不是标签、内容两段式）----
+# 规范原文：中文"【关键词】……**其后是**关键词"、英文"【KEYWORDS】……**后空两格**
+# 编排关键词"——标签和关键词写在**同一段**里（摘要/Abstract 才是"另起一行"）。
+# 所以关键词/Keywords 除了"整段恰好是标签"（两段式，老写法仍照常识别）之外，
+# 还认"标签 + 关键词写在一段"：`【关键词】民法典；合同`、`关键词：民法典`、
+# `Key words: civil code`。
+#
+# 标签后面必须紧跟 `】`/`]`、`:`/`：` 或空白——"关键词是反映论文内容主题的词……"
+# 这种以这三个字开头的普通句子不能被当成标签。
+_INLINE_KEYWORD_BODY = {
+    "关键词": r"关[ 　]*键[ 　]*词",
+    "英文关键词": r"key[ 　]*words?",
+}
+_INLINE_KEYWORD_PATTERNS = {
+    part: re.compile(
+        rf"^(?P<lead>\s*)(?P<open>[【\[]?)(?P<word>{body})(?P<close>[】\]]?)"
+        rf"(?P<colon>[:：]?)(?P<ws>[ 　\t]*)(?P<rest>\S.*)$",
+        re.IGNORECASE | re.DOTALL)
+    for part, body in _INLINE_KEYWORD_BODY.items()
+}
+
+
+@dataclass(frozen=True)
+class InlineKeyword:
+    """同段写法的关键词段落，各部分在**原文**里的下标（都是字符偏移）。
+
+    `label_start:label_end` 是标签本身（含方括号）；`label_end:colon_end` 是标签
+    后面的冒号（可能为空）；`colon_end:rest_start` 是冒号后的空白；`rest_start:`
+    起是关键词。"""
+    label_start: int
+    label_end: int
+    colon_end: int
+    rest_start: int
+
+    def separator(self, text: str) -> str:
+        return text[self.label_end:self.rest_start]
+
+
+def split_inline_keyword(text: str, part: str) -> InlineKeyword | None:
+    """`text`（一整段的文字）是不是"标签 + 关键词"的同段写法；`part` 是
+    "关键词"或"英文关键词"。不是（含整段只有标签的两段式写法）返回 None。"""
+    pattern = _INLINE_KEYWORD_PATTERNS.get(part)
+    if pattern is None:
+        return None
+    m = pattern.match(text)
+    if m is None:
+        return None
+    if not (m.group("close") or m.group("colon") or m.group("ws")):
+        return None             # `关键词是……`：标签后什么分隔都没有，是普通句子
+    return InlineKeyword(m.end("lead"), m.end("close"), m.end("colon"), m.start("rest"))
+
+
+class _LabelOrInline:
+    """关键词的扫描匹配器：整段恰好是标签（两段式）或"标签 + 关键词"（同段写法）。"""
+
+    def __init__(self, pure: re.Pattern[str], part: str) -> None:
+        self._pure = pure
+        self._part = part
+
+    def match(self, text: str):
+        return self._pure.match(text) or split_inline_keyword(text, self._part)
+
+
 # 前向识别器地盘：中文摘要/关键词标签。
 _FRONT_LABEL_WORDS = ("摘要", "关键词")
 _FRONT_LABELS = {w: _cjk_label_pattern(w) for w in _FRONT_LABEL_WORDS}
+_FRONT_LABELS["关键词"] = _LabelOrInline(_FRONT_LABELS["关键词"], "关键词")
 
 # 前向识别器地盘：英文摘要/关键词标签（大小写不敏感；关键词另认 key/word
 # 之间的空格与单复数，见 `_english_keywords_pattern`）。
 _ENGLISH_LABEL_WORDS = ("Abstract", "Keywords")
 _ENGLISH_LABELS = {
     "Abstract": _ascii_label_pattern("Abstract"),
-    "Keywords": _english_keywords_pattern(),
+    "Keywords": _LabelOrInline(_english_keywords_pattern(), "英文关键词"),
 }
 
 # 夹逼区地盘：目录 + 三张清单，谁都不专门认，靠前后夹出范围后一次性扫。
@@ -865,6 +929,12 @@ def recognize(document, *, grammar: HeadingGrammar | None = None,
         extra = forward_duplicates.get(part)
         if extra:
             ordinals[idx].meta["duplicate_label_positions"] = tuple(extra)
+        # 关键词的同段写法（标签 + 关键词在一段里）：这一段自己就是完整部件，
+        # 套格式时标签、关键词在同一段里分别上字体（`apply_structure`），
+        # 不再有"紧随其后的内容段"（见下面内容归属那一步的跳过）。
+        if part in _INLINE_KEYWORD_PATTERNS and split_inline_keyword(
+                paragraphs[idx].text, part) is not None:
+            ordinals[idx].meta["inline"] = True
 
     for part, idx in gap_found.items():
         ordinals[idx].part = part
@@ -935,6 +1005,8 @@ def recognize(document, *, grammar: HeadingGrammar | None = None,
         if entry.part not in _CONTENT_OWNERS:
             continue
         entry.meta.setdefault("slot", "label")
+        if entry.meta.get("inline"):
+            continue            # 同段写法的关键词：自己就是整个部件，不认领后面的段落
         nxt_top = claimed_top_sorted[pos + 1] if pos + 1 < len(claimed_top_sorted) else doc_end_top
         for content_entry in index:
             if content_entry.top_index <= top:

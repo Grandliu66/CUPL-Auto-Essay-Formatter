@@ -242,6 +242,9 @@ DIALOG_ROW_CHARS = 44
 # 见 `build_rows()` 的 `anchor_heading_view`。
 # "标签+正文"型结构：至少常驻 标签位 + 一个正文位（2026-09-13 用户要求）
 CONTENT_STRUCTS = ("摘要", "关键词", "英文摘要", "英文关键词", "参考文献", "附录", "致谢")
+# 关键词的标签和内容写在**同一段**（规范："其后是关键词"，2026-10-10 用户纠正）：
+# 这两个部件缺失时只有一个空位（造出来是"标签＋占位语"一段），不再有单独的"正文位"。
+INLINE_KEYWORD_PARTS = ("关键词", "英文关键词")
 # 不区分"结构标签/正文"的整行结构：文字直接占满整行（题目/副标题/英文题目）。
 # 英文题目原来混在"英文摘要"块的正文里，不能单独开关、也没有自己的空位——
 # 用户 2026-09-14："应该跟中文标题一样单加一个部件，可以打开关闭"，改成
@@ -266,7 +269,8 @@ _AUTO_GENERATED_PARTS = ("目录", "插图清单", "附表清单", "插图和附
 _LIST_SHAPE_PARTS = ("插图清单", "附表清单", "插图和附表清单")
 from essay_tool.gui.widgets import PANEL_BG, checkbutton, init_checkbox_style, wheel_notch
 from essay_tool.gui.win_place import center_on
-from essay_tool.engine.normalize import heading_style_text, label_style_text  # noqa: E402
+from essay_tool.engine.normalize import (  # noqa: E402
+    heading_style_text, inline_keyword_text, label_style_text)
 from essay_tool.engine.apply_structure import LIST_PART_KINDS, reference_display_text
 
 # 六圆点"抓手"占的宽度——画在文字之前，文字从格左缘 pad + GRIP_ROOM 处开始
@@ -399,6 +403,9 @@ class Row:
     # 所以这一行被拖到别的标题层级、或拖回“正文”时，这里的文字一个字不变；
     # 导出也拿同一份（见 `build_manual_structure` 里的 `auto_prefix`/`auto_bodies`）。
     auto_number: str | None = None
+    # 关键词的同段写法（标签和关键词在一段里，如 `【关键词】民法典；合同`）：这一行
+    # 自己就是整个部件，没有单独的"正文位"；显示时只改标签、关键词原样。
+    inline: bool = False
 
 
 def build_rows(path: pathlib.Path, cover_end: int | None = None,
@@ -598,13 +605,13 @@ def build_rows(path: pathlib.Path, cover_end: int | None = None,
         positions = positions_of.get(key, [])
         if not positions:
             add(kind="slot", col="label", block=key, slot_for=key, slot_col="label", zone="front")
-            if key in CONTENT_STRUCTS:
+            if key in CONTENT_STRUCTS and key not in INLINE_KEYWORD_PARTS:
                 add(kind="slot", col="text", block=key, slot_for=key, slot_col="text",
                     zone="front")
             return
         label_idx = positions[0]
         add(kind="label", text=txt(label_idx), col="label", doc_index=label_idx, block=key,
-            zone="front", label=key)
+            zone="front", label=key, inline=bool(ordinals[label_idx].meta.get("inline")))
         for j in positions[1:]:
             add_body_row(j, kind="content", block=key, zone="front")
 
@@ -860,6 +867,8 @@ def shown_text(row: Row, insert_text: dict[str, str] | None) -> str:
     if row.heading is not None:
         return heading_style_text(row.heading, insert_text, raw=row.text)
     if row.label is not None:
+        if row.inline and row.label in INLINE_KEYWORD_PARTS:
+            return inline_keyword_text(row.label, insert_text, row.text) or row.text
         return label_style_text(row.label, insert_text, raw=row.text)
     return row.text
 
@@ -897,12 +906,14 @@ def build_blank_rows() -> list[Row]:
         add(kind="slot", col="text", block=key, slot_for=key, slot_col="text", zone="front")
     for key in ("摘要", "关键词"):
         add(kind="slot", col="label", block=key, slot_for=key, slot_col="label", zone="front")
-        add(kind="slot", col="text", block=key, slot_for=key, slot_col="text", zone="front")
+        if key not in INLINE_KEYWORD_PARTS:
+            add(kind="slot", col="text", block=key, slot_for=key, slot_col="text", zone="front")
     add(kind="slot", col="text", block="英文题目", slot_for="英文题目", slot_col="text", zone="front")
     add(kind="slot", col="text", block="英文副标题", slot_for="英文副标题", slot_col="text", zone="front")
     for key in ("英文摘要", "英文关键词"):
         add(kind="slot", col="label", block=key, slot_for=key, slot_col="label", zone="front")
-        add(kind="slot", col="text", block=key, slot_for=key, slot_col="text", zone="front")
+        if key not in INLINE_KEYWORD_PARTS:
+            add(kind="slot", col="text", block=key, slot_for=key, slot_col="text", zone="front")
     add(kind="slot", col="label", block="目录", slot_for="目录", slot_col="label", zone="front")
     for key in ("插图清单", "附表清单", "插图和附表清单"):
         add(kind="slot", col="label", block=key, slot_for=key, slot_col="label", zone="front")
@@ -1068,6 +1079,10 @@ def ensure_min_content_rows(rows: list[Row]) -> None:
     for key in CONTENT_STRUCTS:
         indices = [i for i, r in enumerate(rows) if r.block == key]
         if not indices:
+            continue
+        if key in INLINE_KEYWORD_PARTS and (
+                all(rows[i].kind == "slot" for i in indices)      # 还没有这个部件：只留一个空位
+                or any(rows[i].inline for i in indices)):         # 同段写法：自己就是整个部件
             continue
         has_content = any(
             rows[i].kind in ("content", "body")
@@ -2850,6 +2865,7 @@ class AdjustWindow:
         si = self.rows.index(slot)
         new_row = Row(rid=slot.rid, kind=new_kind, text=dragged.text, col=slot.slot_col,
                      doc_index=dragged.doc_index, block=slot.slot_for, zone=slot.zone,
+                     inline=dragged.inline and slot.slot_col == "label",
                      special=dragged.special,
                      # 题注角色/推算序号也跟着走：一行图题被拖到别处，它仍然
                      # 是图题（角色不变），显示那块推算出来的编号也用原值。

@@ -33,11 +33,11 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from docx import Document  # noqa: E402
-from docx.oxml.ns import qn  # noqa: E402
 
 from essay_tool.config.preset_io import load_preset  # noqa: E402
 from essay_tool.engine.alerts import AlertCollector  # noqa: E402
 from essay_tool.engine.cover import CoverFields  # noqa: E402
+from essay_tool.engine.loader import clear_default_paragraph_spacing  # noqa: E402
 from essay_tool.engine.pipeline import DEFAULT_PRESET, run  # noqa: E402
 
 # 模板里的"正文示例区"：完整演示一～四级标题＋正文的规范写法。故意把示例
@@ -108,13 +108,7 @@ def build_template(
     # 自己文档原有的样式，不会撞上这个问题，只有"导出空白模板"这条路会
     # ，2026-09-22 审计揪出的）。这里清空这个 docDefaults，改回 Word 真正
     # 的零基线（不写等于 0/单倍），后面按预设显式写的属性不受影响。
-    pPrDefault = doc.styles.element.find(qn("w:docDefaults") + "/" + qn("w:pPrDefault"))
-    if pPrDefault is not None:
-        default_pPr = pPrDefault.find(qn("w:pPr"))
-        if default_pPr is not None:
-            spacing = default_pPr.find(qn("w:spacing"))
-            if spacing is not None:
-                default_pPr.remove(spacing)
+    clear_default_paragraph_spacing(doc)
     for text in _SAMPLE_BODY:                   # 正文示例区（见 _SAMPLE_BODY 注释）
         doc.add_paragraph(text)
     doc.save(str(blank_source))

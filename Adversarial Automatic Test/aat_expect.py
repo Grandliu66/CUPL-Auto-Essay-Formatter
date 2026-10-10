@@ -223,11 +223,30 @@ def match_keywords_label(text: str) -> bool:
                              text.strip(), re.IGNORECASE))
 
 
+def match_inline_keyword(text: str, part: str) -> bool:
+    r"""关键词的“同段写法”（规则表 3.6.2 第 2、4 行第二款）：关键词三字（英文：
+    KEYWORD(S) / Key Word(s)）带可选的【】或[]，其后紧跟“】”“]”、冒号（: ：）
+    或空白，且后面还有内容。三字后没有任何分隔（“关键词是……”）不算。
+    判据按规则表字面写，不抄引擎的正则。"""
+    if part == "关键词":
+        word = _spaced("关键词")
+    elif part == "英文关键词":
+        word = r"key[ \u3000]*words?"
+    else:
+        return False
+    flags = re.IGNORECASE | re.DOTALL
+    match = re.fullmatch(rf"\s*{_OPT_OPEN}{word}(?P<tail>[】\]]?[:：]?[ \u3000\t]*)(?P<rest>\S.*)",
+                         text, flags)
+    return bool(match and match.group("tail"))
+
+
 def match_f_label(text: str, part: str) -> bool:
     if part == "英文摘要":
         return match_ascii_label(text, "ABSTRACT")
     if part == "英文关键词":
-        return match_keywords_label(text)
+        return match_keywords_label(text) or match_inline_keyword(text, part)
+    if part == "关键词":
+        return match_cjk_label(text, F_LABELS[part]) or match_inline_keyword(text, part)
     return match_cjk_label(text, F_LABELS[part])
 
 
@@ -641,6 +660,7 @@ class Expectation:
     duplicates: dict[int, str] = field(default_factory=dict)      # 未采信的重复前置标签
     long_suspects: set[int] = field(default_factory=set)          # 超长疑似标题
     appendix_entries: set[int] = field(default_factory=set)
+    inline_keywords: set[int] = field(default_factory=set)        # 关键词同段写法的段落
 
     def note(self, index: int, role: str, rule: str) -> None:
         self.roles[index] = role
@@ -742,6 +762,8 @@ def expect(shape: DocShape, *, cover_end: int | None = None,
             if match_f_label(text, part):
                 forward_found[part] = index
                 result.note(index, f"{part}标签", f"F{position}")
+                if match_inline_keyword(text, part):
+                    result.inline_keywords.add(index)
                 claimed.add(index)
     # 同一标签在**前置区**内再出现的：识别到但不采信（3.7“重复的部件”），登记位置。
     for index, para in paragraphs:
@@ -1054,6 +1076,8 @@ def expect(shape: DocShape, *, cover_end: int | None = None,
         if role is not None:
             part = role[:-2] if role.endswith("标签") else role
             owner = part if part in OWNER_PARTS else None
+            if index in result.inline_keywords:
+                owner = None              # 同段写法：自己就是整个部件，不归属下方段落
             continue
         if owner is not None:
             if owner in ("摘要", "关键词", "英文摘要", "英文关键词"):

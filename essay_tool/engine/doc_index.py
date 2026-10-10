@@ -936,7 +936,9 @@ def auto_ops(index: list[Entry], structure_required: dict[str, bool], *,
         # 成缺失，导致重复生成占位语）。2026-09-19 起后置标签全篇只认一次
         # （见 recognize.py::_scan_backward），这个具体触发场景已不再出现，
         # 但独立判断仍然更稳妥，保留。
+        # 关键词的同段写法（`meta["inline"]`）：标签和关键词在同一段里，算有内容。
         has_content = any(ordinals[o].meta.get("slot") == "content"
+                          or ordinals[o].meta.get("inline")
                           for o in by_part.get(part, ()))
         for ordinal in by_part.get(part, ()):
             entry = ordinals[ordinal]

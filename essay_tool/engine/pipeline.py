@@ -39,6 +39,7 @@ from essay_tool.engine.apply_structure import (
     apply_table_text_styles,
     build_generated_elements,
     caption_style_indices,
+    merge_keyword_paragraphs,
     normalize_image_paragraphs,
     repeat_table_header_rows,
 )
@@ -336,6 +337,14 @@ def run(
     # 行距。识别不到的题注类段落也要保护（样式是 题注/Caption/图题/表题）。
     protected_indices = ({c.paragraph_index for c in captions}
                          | caption_style_indices(document))
+    # 指令表要在套格式之前定下来：关键词"标签一段、关键词一段"的老写法在这里并成
+    # 一段（去掉被并走那一段的"照抄"指令），套格式才能按同段写法给两截文字分别上字体。
+    if ops is None:
+        ops = auto_ops(
+            index, preset.structure_required,
+            list_kinds=list_plan, insert_toc=not existing_toc,
+        )
+    ops = merge_keyword_paragraphs(document, index, ops)
     apply_from_index(
         document, index, built_styles, skip_indices=protected_indices,
         renumber_references=renumber_references,
@@ -363,14 +372,10 @@ def run(
 
     # ---- 缺失部件的自动补充：索引法执行器，取代旧的锚链插入 ----
     # 到这一步为止，`document` 上所有"已存在"的段落都已经清理/套好格式；
-    # `auto_ops` 只决定"启用但缺失的部件该插在哪条指令的位置"，`rebuild_body`
-    # 按这份指令表把正文整体重排一遍——已存在的段落原样搬走（元素没被复制，
-    # 携带着刚套好的格式），缺失的部件现造现插。
-    if ops is None:
-        ops = auto_ops(
-            index, preset.structure_required,
-            list_kinds=list_plan, insert_toc=not existing_toc,
-        )
+    # `auto_ops` 只决定"启用但缺失的部件该插在哪条指令的位置"（指令表在上面
+    # `apply_from_index` 之前就算好了），`rebuild_body` 按这份指令表把正文整体
+    # 重排一遍——已存在的段落原样搬走（元素没被复制，携带着刚套好的格式），
+    # 缺失的部件现造现插。
 
     def builder(op):
         return build_generated_elements(

@@ -41,7 +41,7 @@ from docx.text.run import Run
 
 from essay_tool.engine.cleanup import set_run_text
 from essay_tool.engine.doc_index import Entry, paragraph_ordinals
-from essay_tool.engine.recognize import INTRO_WORDS, LEVEL_PART_NAMES
+from essay_tool.engine.recognize import INTRO_WORDS, LEVEL_PART_NAMES, split_inline_keyword
 
 # 识别出来的"英文摘要"/"英文关键词"标签该写成什么样（规范写法）。旧预设里
 # 只有"英文摘要"一格、装两行（上行摘要标签、下行关键词标签），读不到
@@ -233,6 +233,29 @@ def _label_replacement(part: str, insert_text: dict[str, str], current: str = ""
     return template
 
 
+def inline_keyword_text(part: str, insert_text: dict[str, str], raw: str) -> str | None:
+    """关键词同段写法（`关键词：民法典；合同`）在成品里的文字：**只把开头的标签**
+    换成预设那一格的写法，关键词一个字不碰。`raw` 不是同段写法返回 None。
+
+    标签后面的分隔：新标签以括号收尾（`【关键词】`）→ 去掉用户的冒号，空白原样保留；
+    新标签不带括号（学术十星 `关键词`）→ 冒号、空白原样保留，什么分隔都没有就补
+    一个空格（免得粘成"关键词民法典"）。预设那一格被清空＝保持原样。
+    """
+    parts = split_inline_keyword(raw, part)
+    if parts is None:
+        return None
+    label = _label_replacement(part, insert_text, raw[parts.label_start:parts.label_end])
+    if not label:
+        return raw
+    colon = raw[parts.label_end:parts.colon_end]
+    space = raw[parts.colon_end:parts.rest_start]
+    if label.rstrip().endswith(("】", "]")):
+        sep = space
+    else:
+        sep = colon + space or " "
+    return label + sep + raw[parts.rest_start:]
+
+
 def normalize_document(
     document: DocumentObject,
     index: list[Entry],
@@ -267,6 +290,16 @@ def normalize_document(
                 continue
             _splice_prefix(paragraph, _prefix_len(paragraph.text, entry.meta.get("title", "")),
                            prefix)
+            continue
+
+        if entry.meta.get("inline") and part in ("关键词", "英文关键词"):
+            # 同段写法：只改开头的标签，关键词原样（见 `inline_keyword_text`）。
+            text = paragraph.text
+            new = inline_keyword_text(part, insert_text, text)
+            if new is not None and new != text:
+                parts = split_inline_keyword(text, part)
+                tail = len(text) - parts.rest_start
+                _splice_prefix(paragraph, len(text) - tail, new[:len(new) - tail])
             continue
 
         if part in _BARE_LABEL_PARTS and entry.meta.get("slot", "label") == "label":

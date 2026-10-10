@@ -13,6 +13,7 @@ import stat
 import time
 
 from docx import Document
+from docx.oxml.ns import qn
 
 TXT_ENCODINGS = ("utf-8-sig", "utf-8", "gbk")
 
@@ -33,6 +34,27 @@ def _clear_readonly(path: pathlib.Path) -> None:
         path.chmod(stat.S_IWRITE | stat.S_IREAD)
     except OSError:
         pass
+
+
+def clear_default_paragraph_spacing(doc) -> None:
+    """清掉 python-docx 自带空白模板 `docDefaults` 里写死的"段后 10 磅、1.15 倍行距"。
+
+    预设里正文等样式的"段后"留空＝继承底座；底座带着 10 磅，就会直接漏进成品
+    （.txt 导入的正文段后多出 10 磅，2026-10-10 用户报的；"导出空白模板"同一个
+    根因，V1.1.2 在 `template.build_template` 里修过，.txt 导入这条路当时漏了）。
+    凡是**从 `Document()` 新建**的工作文档都要先过这一道，改回 Word 真正的零基线
+    （不写＝段后 0、单倍）；预设显式写的属性不受影响。.docx 导入是复制用户自己的
+    文档，底座是用户的，不能动。
+    """
+    pPrDefault = doc.styles.element.find(qn("w:docDefaults") + "/" + qn("w:pPrDefault"))
+    if pPrDefault is None:
+        return
+    default_pPr = pPrDefault.find(qn("w:pPr"))
+    if default_pPr is None:
+        return
+    spacing = default_pPr.find(qn("w:spacing"))
+    if spacing is not None:
+        default_pPr.remove(spacing)
 
 
 def _read_text(path: pathlib.Path) -> str:
@@ -92,6 +114,7 @@ def load_as_working_copy(source: str | pathlib.Path, work_dir: str | pathlib.Pat
     if suffix == ".txt":
         text = _read_text(source)
         doc = Document()
+        clear_default_paragraph_spacing(doc)
         for line in text.splitlines():
             doc.add_paragraph(line)
         target = work_dir / (source.stem + ".docx")

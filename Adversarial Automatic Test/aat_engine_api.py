@@ -224,6 +224,10 @@ def expect_index(prepared, expectation, scheme: str | None = None) -> list:
     index = recognize(Document(str(prepared)), grammar=grammar)
     for ordinal, entry in paragraph_ordinals(index).items():
         _apply_role(entry, expectation.roles.get(ordinal))
+        if ordinal in getattr(expectation, "inline_keywords", ()):
+            entry.meta["inline"] = True       # 关键词同段写法
+        else:
+            entry.meta.pop("inline", None)
     return index
 
 
