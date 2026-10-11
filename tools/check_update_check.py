@@ -328,6 +328,20 @@ def case_gui() -> None:
             app.gui_settings.update_last_check = int(time.time()) - 21 * 3600
             ui.auto_check(app, style)
             check("超过间隔 ⇒ 联网（自动、非手动）", called == [False], str(called))
+            # 关了自动检查、手动查过、再勾上：下次启动必须会检查（不能被"上次检查时间"挡住）
+            import essay_tool.gui.main_window as _mw
+            _mw.save_settings = lambda s: saved.append(1)            # 不动用户真实的设置文件
+            app.var_update_auto.set(False)
+            app._on_update_auto_toggle()
+            check("取消勾选 ⇒ 关闭自动检查", app.gui_settings.update_check_enabled is False)
+            app.gui_settings.update_last_check = int(time.time())   # 关着期间手动检查过一次
+            app.var_update_auto.set(True)
+            app._on_update_auto_toggle()
+            called.clear()
+            ui.auto_check(app, style)
+            check("重新勾选 ⇒ 开关打开，且下次启动会检查（不被上次检查时间挡住）",
+                  app.gui_settings.update_check_enabled is True and app.gui_settings.update_last_check == 0
+                  and called == [False], f"{app.gui_settings.update_last_check} {called}")
             check("构造主窗口本身不联网（selftest 安全）", True)
         finally:
             app.destroy()

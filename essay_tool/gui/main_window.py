@@ -952,7 +952,13 @@ class MainWindow(tk.Tk):
         update_ui.auto_check(self, self._update_style())
 
     def _on_update_auto_toggle(self) -> None:
-        self.gui_settings.update_check_enabled = bool(self.var_update_auto.get())
+        enabled = bool(self.var_update_auto.get())
+        self.gui_settings.update_check_enabled = enabled
+        if enabled:
+            # 重新打开自动检查：清掉"上次检查时间"，下次启动就检查。否则关着的这段时间里
+            # 做过的手动检查（也会记时间）会让它在 20 小时内不动，看起来像"勾上了却不生效"
+            # （用户 2026-10-11 反馈）。
+            self.gui_settings.update_last_check = 0
         self._save_gui_settings()
 
     def on_open_changelog(self) -> None:
