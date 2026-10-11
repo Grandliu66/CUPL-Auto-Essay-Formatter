@@ -1,0 +1,23 @@
+{
+  "version": "1.2.0",
+  "date": "2026-10-11",
+  "changelog": "1. 新增检查更新功能。默认在启动软件后或者点击“检查更新”时自动检查更新，如有新版本会显示更新日志和下载链接。\n2. 本次更新更新了用户协议。主要变化为，新增了在检查更新时会联网的内容。",
+  "downloads": [
+    {
+      "name": "夸克网盘（链接一）",
+      "url": "https://pan.quark.cn/s/697a3cf1a047"
+    },
+    {
+      "name": "夸克网盘（链接二）",
+      "url": "https://pan.quark.cn/s/8f1991b6dea3"
+    },
+    {
+      "name": "百度网盘",
+      "url": "https://pan.baidu.com/s/5KVR3Waq6nGQyUahDL6En0w"
+    },
+    {
+      "name": "GitHub Release",
+      "url": "https://github.com/Grandliu66/CUPL-Auto-Essay-Formatter/releases/latest"
+    }
+  ]
+}

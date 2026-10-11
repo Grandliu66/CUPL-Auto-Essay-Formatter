@@ -31,6 +31,11 @@ class GuiSettings:
     # 第一次看到的就是这个）。
     backup_keep_count: int = 4
     backup_keep_unit: str = "周"
+    # 检查更新（`essay_tool/update_check.py`）：启动时是否自动检查、上次成功检查的时间
+    # （Unix 秒，自动检查一天最多一次）、用户点了"忽略此版本"的版本号。
+    update_check_enabled: bool = True
+    update_last_check: int = 0
+    update_ignored_version: str = ""
 
 
 def _settings_path() -> pathlib.Path:
@@ -70,11 +75,11 @@ def load_settings() -> GuiSettings:
         default_value = getattr(defaults, name)
         if name == "backup_dir":
             ok = value is None or isinstance(value, str)
-        elif name in ("backup_enabled", "backup_auto_prune"):
+        elif name in ("backup_enabled", "backup_auto_prune", "update_check_enabled"):
             ok = isinstance(value, bool)
-        elif name == "backup_keep_count":
+        elif name in ("backup_keep_count", "update_last_check"):
             ok = isinstance(value, int) and not isinstance(value, bool)
-        elif name == "backup_keep_unit":
+        elif name in ("backup_keep_unit", "update_ignored_version"):
             ok = isinstance(value, str)
         else:
             ok = isinstance(value, type(default_value)) if default_value is not None else True

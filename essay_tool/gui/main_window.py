@@ -74,7 +74,11 @@ DEVELOPER_WORDS = """@关于本工具
 
 # 「更新日志」弹窗正文（用户 2026-09-20 提供）。用 `_open_text_popup(markup=True)`：
 # `**…**` 加粗；以后的新版本追加在最前面。
-CHANGELOG_TEXT = """**V1.1.4 2026/10/11**
+CHANGELOG_TEXT = """**V1.2.0 2026/10/11**
+**1.** 新增检查更新功能。默认在启动软件后或者点击“检查更新”时自动检查更新，如有新版本会显示更新日志和下载链接。
+**2.** 本次更新更新了用户协议。主要变化为，新增了在检查更新时会联网的内容。
+
+**V1.1.4 2026/10/11**
 **1. 修复了如下问题：**（by@上局合段-参数方程）
 （1）关键词
 · 修复了关键词标签“【关键词】”被错误加粗的问题（英文“【KEYWORDS】”按规范仍加粗）。
@@ -278,6 +282,7 @@ from essay_tool.config.paths import (builtin_presets_dir, cleanup_session_work_d
                                      import_backup_dir, purge_stale_work_dirs, resource_dir,
                                      session_work_dir, user_presets_dir)
 from essay_tool.config.settings import GuiSettings, load_settings, save_settings  # noqa: E402
+from essay_tool.gui import update_ui  # noqa: E402
 
 FAMILY = "Microsoft YaHei UI"
 C_APP = "#f4f4f2"
@@ -423,9 +428,11 @@ from essay_tool.gui.win_place import center_on
 # 联系方式单独走一个按钮，不放在这份协议正文里，见 on_open_agreement 附近。
 # 排版标记（2026-09-20，程序内弹窗与安装向导的 RTF 共用同一份原文，见 packaging/make_license.py）：
 # 行首 "@" ＝ 居中加粗的大标题；"**…**" ＝ 加粗。去掉标记后就是逐字不变的原文。
-AGREEMENT_TEXT = """@一、本工具的性质
+AGREEMENT_TEXT = """（修改于2026/10/11）
 
-1. 本工具为离线运行的论文格式识别与排版辅助软件，仅用于辅助用户完成文档格式整理工作。
+@一、本工具的性质
+
+1. 除检查更新可能会联网外，本工具为离线运行的论文格式识别与排版辅助软件，仅用于辅助用户完成文档格式整理工作。在检查更新功能中，本工具仅从云端检查新版本信息，您的数据不会被以任何形式上传。
 
 2. **开发者不对排版结果的准确性、完整性及适用性作出任何保证。**用户在使用本工具生成排版结果后，仍应自行核对格式是否符合期刊、机构或提交单位的具体要求。**因排版误差、格式遗漏或识别偏差所导致的一切后果，由用户自行承担，开发者不承担任何责任。**
 
@@ -929,6 +936,24 @@ class MainWindow(tk.Tk):
     def on_open_developer_words(self) -> None:
         """「关于」页「开发者的话」点开：弹一个信式排版的文字窗口。"""
         self._open_text_popup("开发者的话", DEVELOPER_WORDS, formatted=True)
+
+    # ------------------------------------------------------------ 检查更新
+
+    def _update_style(self) -> "update_ui.Style":
+        return update_ui.Style(bg=C_PANEL, fg=C_TEXT, link=C_LINK, family=FAMILY)
+
+    def on_check_updates(self) -> None:
+        """「关于」页「检查更新」：手动检查，有没有新版本都会明确告诉用户。"""
+        self.status("正在检查更新……")
+        update_ui.start_check(self, self._update_style(), manual=True)
+
+    def auto_check_updates(self) -> None:
+        """启动后调一次（`main()` 里排的）：一天最多一次，读不到完全静默。"""
+        update_ui.auto_check(self, self._update_style())
+
+    def _on_update_auto_toggle(self) -> None:
+        self.gui_settings.update_check_enabled = bool(self.var_update_auto.get())
+        self._save_gui_settings()
 
     def on_open_changelog(self) -> None:
         """「关于」页「更新日志」点开：弹文字窗口（`**` 加粗）。"""
@@ -2124,6 +2149,15 @@ class MainWindow(tk.Tk):
                  font=(FAMILY, 10), bg=C_PANEL, fg=C_TEXT,
                  justify="center").pack(side="left")
         label(p3, f"v{__version__}", pady=(10, 0))      # 版本号唯一出处：essay_tool/__init__.py
+        # 检查更新：只读版本信息，不下载、不上传（见 update_check.py / update_ui.py）
+        tk.Button(p3, text="检查更新", font=(FAMILY, 10), padx=12, pady=3,
+                  command=self.on_check_updates).pack(anchor="center", pady=(8, 0))
+        self.var_update_auto = tk.BooleanVar(value=self.gui_settings.update_check_enabled)
+        self._checkbutton(p3, "启动时自动检查更新", variable=self.var_update_auto,
+                          command=self._on_update_auto_toggle, font_size=10
+                          ).pack(anchor="center", pady=(6, 0))
+        label(p3, "检查更新只读取版本信息，不会上传你的任何文档或数据。",
+              font=(FAMILY, 9), fg=C_HINT, pady=(2, 0))
         # 「更新日志」「开发者的话」：小字、划线、可点——点开文字窗口
         # （正文见模块顶部的 CHANGELOG_TEXT / DEVELOPER_WORDS；2026-09-19/20 用户要求）。
         log = tk.Label(p3, text="更新日志", font=(FAMILY, 9, "underline"),
@@ -4771,6 +4805,7 @@ def main() -> None:
         _show_startup_crash(exc)
         return
     print("主窗口已打开。", flush=True)
+    app.after(2500, app.auto_check_updates)     # 窗口出来、安定之后再说；不在构造函数里，selftest 不联网
     try:
         app.mainloop()
     finally:

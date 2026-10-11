@@ -123,9 +123,24 @@ def _selftest(out_path: str) -> int:
             tk.Tk.__init__, tk.Tk.state = orig_init, orig_state
         return "主窗口可构造，格式表可灌数据，预设可收集"
 
+    def update_check():
+        # 不联网：只确认"联网检查更新"要用到的东西在包里（https 支持、解析与校验逻辑）
+        import json
+        import ssl
+        from essay_tool import update_check as uc
+        ssl.create_default_context()
+        info = uc.parse_latest(json.dumps({
+            "version": "9.9.9", "date": "2099-01-02", "changelog": "x",
+            "downloads": [{"name": "n", "url": "https://github.com/Grandliu66"},
+                          {"name": "bad", "url": "https://example.com/"}]}))
+        assert info is not None and len(info.downloads) == 1, "latest.json 解析/白名单不对"
+        assert uc.is_newer("1.10.0", "1.9.0") and uc.SOURCES, "版本比较或更新源不对"
+        return "https 支持可用，latest.json 解析与链接白名单正常（本项不联网）"
+
     for name, fn in (("内置预设", presets), ("官方文件校验", official), ("图片与图标", assets),
                      ("封面生成", covers), ("空白模板", blank_template),
-                     ("Excel 往返", excel_roundtrip), ("数据目录", user_dirs), ("主窗口", gui)):
+                     ("Excel 往返", excel_roundtrip), ("数据目录", user_dirs),
+                     ("检查更新模块", update_check), ("主窗口", gui)):
         check(name, fn)
     lines.append("结果：" + ("全部通过" if not bad else f"{bad} 项失败"))
     pathlib.Path(out_path).write_text("\n".join(lines), encoding="utf-8")
