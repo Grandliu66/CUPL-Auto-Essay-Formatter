@@ -304,12 +304,14 @@ def toc_field_part(paragraph) -> str:
 
 def is_toc_paragraph(paragraph) -> bool:
     """目录条目（样式叫 `toc 1`/`toc 2`…）。"""
-    return str(paragraph.style.name).strip().lower().startswith("toc ")
+    style = paragraph.style
+    return style is not None and str(style.name).strip().lower().startswith("toc ")
 
 
 def is_list_entry_paragraph(paragraph) -> bool:
     """图表目录/清单的条目段落（Word 内置样式 `table of figures`）。"""
-    return str(paragraph.style.name).strip().lower() == "table of figures"
+    style = paragraph.style
+    return style is not None and str(style.name).strip().lower() == "table of figures"
 
 
 def _fld_char_kinds(paragraph) -> list[str]:
@@ -719,6 +721,15 @@ def build_ops(rows, index: list[Entry], *, enabled=None,
         or getattr(r, "kind", "") == "content"
     } - {None}
 
+    # 面板上有"标签位"空位的关键词类部件：标签位生成的就是"标签＋占位语"整段，同一部件的
+    # "内容位"空位就不再生成第二遍占位语（2026-10-11 审计：缺失关键词时在块头点"＋行"，
+    # 成品里同一句占位语出现两遍）。用户往内容位拖进来的真实内容，由
+    # `apply_structure.merge_keyword_paragraphs` 并进标签段。
+    generated_inline_labels = {
+        getattr(r, "slot_for", None) for r in kept
+        if getattr(r, "kind", "") == "slot" and getattr(r, "slot_col", "") == "label"
+    } & INLINE_KEYWORD_PARTS
+
     for i, row in enumerate(kept):
         kind = getattr(row, "kind", "")
         doc_index = getattr(row, "doc_index", None)
@@ -729,7 +740,10 @@ def build_ops(rows, index: list[Entry], *, enabled=None,
             part = getattr(row, "slot_for", None)
             if part and enabled.get(part, False):
                 col = getattr(row, "slot_col", "")
-                if col == "label" and part in text_col_parts:
+                if part in INLINE_KEYWORD_PARTS:
+                    if col == "text" and part in generated_inline_labels:
+                        continue               # 标签位已带占位语，不再造第二段
+                elif col == "label" and part in text_col_parts:
                     col = "label_only"
                 ops.append(Op("generate", part=part, slot_col=col))
                 add_fields(part)
@@ -777,6 +791,13 @@ def build_ops(rows, index: list[Entry], *, enabled=None,
             # 任何标签（游离正文）这种 `owner` 算不出结果的情况，才退回读
             # `row.block`/`row.label`（兜底，正常情况下两者应该一致）。
             entry.part = owner.get(i) or getattr(row, "block", None) or getattr(row, "label", None)
+            # 槽位（标签/内容）跟着**这一行现在是什么行**走，不沿用识别时留下的旧值：拖进
+            # 内容位的段落要按"内容"处理——识别时它没有槽位（普通正文/英文题目……）的话，
+            # 下游（`normalize_document`）会把"没有槽位"当成标签、把整段文字改写成标签写法
+            # （2026-10-11 拖入英文关键词内容实测：成品里内容被替换成了【KEYWORDS】）；
+            # 识别时是别的部件的"内容"（slot=content）却被拖进标签位的，也要按"标签"处理。
+            if entry.part and kind in ("label", "content"):
+                entry.meta["slot"] = "label" if kind == "label" else "content"
         # 图题/表题：结构页勾的"图/表/续"写回索引（`Entry.meta["caption"]`），
         # 导出的告警与套样式都读这一份——手动改过的题注不再被现场重新识别
         # 冲掉。标题行/域行不可能是题注，一并清掉识别遗留的标记。
@@ -832,6 +853,9 @@ CONTENT_OWNER_PARTS = frozenset({
     "摘要", "关键词", "英文摘要", "英文关键词",
     "引言", "结论", "参考文献", "附录", "致谢",
 })
+# 关键词的标签和关键词写在**同一段**（规范"其后是关键词"；2026-10-10 起）：缺失时生成的
+# 是"标签＋占位语"整段，没有单独的"内容位"可生成。
+INLINE_KEYWORD_PARTS = frozenset({"关键词", "英文关键词"})
 # 引言/结论 2026-09-16 起"当完整的标题"，永不补齐（不补标签也不补内容）。
 NO_FILL_PARTS = frozenset({"引言", "结论"})
 

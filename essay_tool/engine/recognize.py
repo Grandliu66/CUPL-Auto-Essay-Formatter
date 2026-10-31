@@ -522,7 +522,8 @@ def _is_caption_style(paragraph) -> bool:
     """题注类样式——不是本轮要重做的识别范围，但游离正文（题目/副标题）
     候选段落里绝不能把题注段落算进去（`TOC.docx` 实测：清单域旁边那条
     "表 1" Caption 样式段落，不排除的话会被当成副标题）。"""
-    return str(paragraph.style.name).strip().lower() in _CAPTION_STYLE_NAMES
+    style = paragraph.style
+    return style is not None and str(style.name).strip().lower() in _CAPTION_STYLE_NAMES
 
 
 def _cjk_only(text: str) -> str:

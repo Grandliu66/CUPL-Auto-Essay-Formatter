@@ -1168,7 +1168,8 @@ def is_toc_paragraph(paragraph: Paragraph) -> bool:
     `表 1 各国立法比较……3`——它不以标点结尾、也不长，单看文字跟真表题一模一样。
     只有样式能区分它们。
     """
-    return str(paragraph.style.name).strip().lower().startswith("toc ")
+    style = paragraph.style
+    return style is not None and str(style.name).strip().lower().startswith("toc ")
 
 
 def is_list_entry_paragraph(paragraph: Paragraph) -> bool:
@@ -1183,7 +1184,8 @@ def is_list_entry_paragraph(paragraph: Paragraph) -> bool:
     条目段，样式是 `table of figures`、文字是 `表 1 1`（条目 `表 1` + 页码 `1`）
     ——不认样式的话，它会被当标题、被当题注，还会被认成论文题目。
     """
-    return str(paragraph.style.name).strip().lower() == "table of figures"
+    style = paragraph.style
+    return style is not None and str(style.name).strip().lower() == "table of figures"
 
 
 def has_seq_field(paragraph: Paragraph) -> bool:

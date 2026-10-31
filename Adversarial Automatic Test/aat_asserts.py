@@ -475,6 +475,59 @@ def case_keep_run_formatting() -> None:
           f"color={_color(plain)!r} b={_flag(plain, 'w:b')!r}", "总则一·链接")
 
 
+def case_keyword_slots() -> None:
+    """关键词缺失 + 结构页手动加"正文位" / 往正文位拖入真实内容（2026-10-11 审计）。
+
+    产品设计：关键词的标签和关键词写在同一段（规范"其后是关键词"）——
+      * 缺失时生成的是**一段**"标签＋占位语"；就算用户又加了"正文位"，占位语也只出现一次；
+      * 用户把真实内容拖进正文位：内容并进标签段，同一段里标签在前、内容在后，不另起一段。
+    """
+    from docx import Document
+    from essay_tool.engine.doc_index import build_ops
+    from essay_tool.engine.placeholders import CONTENT_PLACEHOLDER_PROMPTS, ENGLISH_PLACEHOLDER_PROMPTS
+    from essay_tool.gui import adjust_preview as ap
+
+    preset = load_preset(PRESET)
+    enabled = dict(preset.structure_required)
+    enabled.update({"关键词": True, "英文关键词": True})
+    work = WORK / "keyword_slots"
+    work.mkdir(parents=True, exist_ok=True)
+
+    def export(paras, part, drag_text=None):
+        doc = Document()
+        for text in paras:
+            doc.add_paragraph(text)
+        src = work / f"{part}-{'drag' if drag_text else 'slot'}.docx"
+        doc.save(str(src))
+        rows, index = ap.build_rows(src)
+        ap.add_content_slot(rows, part)
+        if drag_text:
+            slot = next(r for r in rows if r.block == part and r.kind == "slot" and r.slot_col == "text")
+            target = next(r for r in rows if r.text == drag_text)
+            rows.remove(target)
+            rows[rows.index(slot)] = ap.Row(rid=slot.rid, kind="content", text=drag_text, col="text",
+                                            doc_index=target.doc_index, block=part, zone="front")
+        ops = build_ops(rows, index, enabled=enabled, list_kinds={})
+        out = pipeline.run(src, None, work / f"{part}-{'drag' if drag_text else 'slot'}-out",
+                           alerts=AlertCollector(), preset_config=preset, index=index, ops=ops)
+        return [p.text for p in Document(str(out)).paragraphs]
+
+    base = ["论文题目", "摘要", "摘要内容。"]
+    tail = ["一、引言", "正文。"]
+    for part, prompt, label in (("关键词", CONTENT_PLACEHOLDER_PROMPTS["关键词"], "【关键词】"),
+                                ("英文关键词", ENGLISH_PLACEHOLDER_PROMPTS["英文关键词"], "【KEYWORDS】")):
+        texts = export([*base, *tail], part)
+        check(f"{part}缺失 + 加了正文位：占位语只出现一次", sum(prompt in t for t in texts) == 1,
+              str([t for t in texts if prompt in t]), "审计 2026-10-11 问题二")
+        check(f"{part}缺失 + 加了正文位：标签与占位语在同一段",
+              any(t.startswith(label) and prompt in t for t in texts), str(texts), "审计 2026-10-11 问题二")
+    for part, content, label in (("关键词", "民法典；合同", "【关键词】"),
+                                 ("英文关键词", "civil code; contract", "【KEYWORDS】")):
+        texts = export([*base, content, *tail], part, drag_text=content)
+        merged = [t for t in texts if t.startswith(label) and content in t]
+        check(f"{part}缺失 + 把真实内容拖进正文位：并进标签段（一段）",
+              len(merged) == 1 and sum(content in t for t in texts) == 1, str(texts), "审计 2026-10-11 问题二")
+
 def main() -> int:
     started = time.perf_counter()
     shutil.rmtree(WORK, ignore_errors=True)
@@ -488,6 +541,8 @@ def main() -> int:
     case_cleanup()
     print("== 保留的字符格式（总则一）==")
     case_keep_run_formatting()
+    print("== 关键词缺失 + 结构页正文位 ==")
+    case_keyword_slots()
     print()
     print(f"失败 {len(fails)} 条；问题条数：{len(fails)}"
           f"（耗时 {time.perf_counter() - started:.1f}s）")

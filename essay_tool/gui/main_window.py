@@ -74,7 +74,15 @@ DEVELOPER_WORDS = """@关于本工具
 
 # 「更新日志」弹窗正文（用户 2026-09-20 提供）。用 `_open_text_popup(markup=True)`：
 # `**…**` 加粗；以后的新版本追加在最前面。
-CHANGELOG_TEXT = """**V1.2.0 2026/10/11**
+CHANGELOG_TEXT = """**V1.2.1 2026/10/31**
+**1. 修复了如下问题：**
+· 修复了缺少 Normal 样式定义的文档导入时识别失败的问题。（by 一株小草）
+· 课程考核封面现在可以填写姓名和学号。
+· 修复缺少关键词时，在结构页添加正文位可能重复生成占位语、拖入的内容没有与标签合并的问题。
+· 修复结构页尚未确认的部件勾选状态可能影响本次导出的问题。
+**2.** 关于页新增 GPT-6 署名。
+
+**V1.2.0 2026/10/11**
 **1.** 新增检查更新功能。默认在启动软件后或者点击“检查更新”时自动检查更新，如有新版本会显示更新日志和下载链接。
 **2.** 本次更新更新了用户协议。主要变化为，新增了在检查更新时会联网的内容。
 
@@ -1713,6 +1721,8 @@ class MainWindow(tk.Tk):
             ("course_code", "课程代码", ""),
             ("course_seq", "课程序号", ""),
             ("teacher_name", "任课教师", "默认只写姓名，不带职称"),
+            ("student_name", "姓名", ""),
+            ("student_id", "学号", ""),
         ):
             field(self._cover_fields_course, key, label, hint_text)
 
@@ -2151,7 +2161,7 @@ class MainWindow(tk.Tk):
                 bg=C_PANEL, fg=C_TEXT).pack(side="left", padx=(0, 12))
         # 两行名字合成一张两行标签（行距＝字体行距，比两张单行标签各占一行
         # 近 ~6px；2026-09-19 用户"再靠近一点"）。justify="center" 保持居中观感。
-        tk.Label(credit_row, text="Claude Sonnet 5\nDeepSeek V4.1 Flash",
+        tk.Label(credit_row, text="Claude Sonnet 5\nDeepSeek V4.1 Flash\nGPT-6",
                  font=(FAMILY, 10), bg=C_PANEL, fg=C_TEXT,
                  justify="center").pack(side="left")
         label(p3, f"v{__version__}", pady=(10, 0))      # 版本号唯一出处：essay_tool/__init__.py
@@ -3615,9 +3625,16 @@ class MainWindow(tk.Tk):
             raise ValueError(f"页眉装饰线{side}延伸不能是负数：{text}")
         return value
 
-    def _collect_current_preset_config(self):
+    def _collect_current_preset_config(self, *, for_export: bool = False):
         """把「页面」「格式」「结构」「封面」几个页签当前的表单值收成一份
         PresetConfig——「保存当前设置为新配置」用这个。
+
+        `for_export=True`（导出论文用）：**部件启用状态取结构页上次点"确认"时的快照**
+        （`confirmed_enabled`），不取实时值。导出只认确认过的结构页——"有调整还没
+        确认"的弹窗承诺"这次改动不会应用"；以前启用状态走了快照、可"要不要插清单
+        域"（`list_plan`，由这份配置的 `structure_required` 算出）还吃着实时值，
+        同一次导出里两处来源不一致（2026-10-11 审计：确认时开、事后取消勾选没确认
+        ⇒ 清单域消失；反方向 ⇒ 凭空多出清单域）。
 
         「引注」块（脚注/参考文献编号设置）和结构部件表都各自在自己的页签
         里管，这里一并收进来；`_preset_extra` 里记的是表单管不到的几项
@@ -3693,6 +3710,11 @@ class MainWindow(tk.Tk):
         from essay_tool.gui.adjust_preview import ENABLED
         structure_required: dict[str, bool] = {n: on for n, on, _txt, _note in STRUCTURE_PARTS}
         structure_required.update(ENABLED)
+        if for_export:
+            inst = self._adjust_instance
+            if (inst is not None and self.doc_path is not None and inst.doc_path == self.doc_path
+                    and inst.confirmed_index is not None):
+                structure_required.update(inst.confirmed_enabled)
         structure_insert_text = self._label_texts()
 
         return PresetConfig(
@@ -4465,7 +4487,7 @@ class MainWindow(tk.Tk):
             doc = _Document(str(inst.doc_path))
             unwrap_section_break_sdt(
                 doc, keep_content=bool(body_toc_field_parts(doc) - regenerate_fields))
-            preset_config = self._collect_current_preset_config()
+            preset_config = self._collect_current_preset_config(for_export=True)
             # 行序和识别索引、封面范围都取**上次确认时**的那一份（成对的，见
             # `AdjustWindow.__init__` 里 `confirmed_index` 的说明）。
             _collector, list_plan, _captions = collect_source_alerts(
@@ -4582,7 +4604,8 @@ class MainWindow(tk.Tk):
             # 只是顺手调了下页边距）都会被无声吃掉，导出的和屏幕上看到的对
             # 不上。这是 2026-09-14 定性的"恶性 bug"，`preset_config` 就是
             # 为了堵上它加的——`pipeline.run()` 拿到它就不会再去读文件。
-            preset_config = self._collect_current_preset_config()
+            # （部件启用取结构页确认时的快照，见 `for_export` 的说明。）
+            preset_config = self._collect_current_preset_config(for_export=True)
             from essay_tool.engine.alerts import AlertCollector
             from essay_tool.engine.pipeline import run
             alerts = AlertCollector()

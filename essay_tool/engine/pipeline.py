@@ -345,7 +345,7 @@ def run(
             index, preset.structure_required,
             list_kinds=list_plan, insert_toc=not existing_toc,
         )
-    ops = merge_keyword_paragraphs(document, index, ops)
+    ops = merge_keyword_paragraphs(document, index, ops, preset.structure_insert_text)
     apply_from_index(
         document, index, built_styles, skip_indices=protected_indices,
         renumber_references=renumber_references,

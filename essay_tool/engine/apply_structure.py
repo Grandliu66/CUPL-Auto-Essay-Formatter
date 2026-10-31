@@ -789,7 +789,8 @@ def keyword_label_separator(label: str) -> str:
 _INLINE_KEYWORD_PARTS = ("关键词", "英文关键词")
 
 
-def merge_keyword_paragraphs(document: DocumentObject, index: list[Entry], ops: list) -> list:
+def merge_keyword_paragraphs(document: DocumentObject, index: list[Entry], ops: list,
+                             insert_text: dict[str, str] | None = None) -> list:
     """把"标签一段、关键词在下一段"的老写法**合成一段**（规范："【关键词】……其后是
     关键词"，用户 2026-10-10：导出时都要放在一行）。返回去掉了被并走的段落的
     新指令表。
@@ -802,6 +803,11 @@ def merge_keyword_paragraphs(document: DocumentObject, index: list[Entry], ops: 
       * 标签后面没有任何内容、指令表又要生成"内容位占位语"：占位语直接并进标签段，
         不再另起一段。
     并完在标签上记 `meta["inline"]`，之后 `apply_from_index` 就按同段写法套格式。
+
+    还有一种来源：结构页里关键词缺失（标签位是"生成"指令），用户又往它的内容位拖进了
+    真实段落。这时没有现成的标签段可并，反过来：把预设写法的标签（含末尾间隔）
+    **写到那一段真实内容的开头**，那一段就成了同段写法的关键词段，"生成标签"指令去掉
+    （`insert_text` 给标签写法）。
     **必须在 `apply_from_index` 之前调用**（文字已经被 `normalize_document` 改写
     成规范标签之后），此时段落下标还是识别时的原样。
     """
@@ -809,6 +815,10 @@ def merge_keyword_paragraphs(document: DocumentObject, index: list[Entry], ops: 
     ordinal_of = {id(entry): o for o, entry in paragraph_ordinals(index).items()}
     dropped: set[int] = set()                 # 要从指令表里去掉的指令（按 id）
     for k, op in enumerate(ops):
+        if (op.action == "generate" and op.part in _INLINE_KEYWORD_PARTS and op.slot_col == "label"
+                and op.kind == "placeholder" and insert_text is not None):
+            _merge_dragged_content_into_label(document, ops, k, ordinal_of, insert_text, dropped)
+            continue
         entry = op.entry if op.action == "copy" else None
         if (entry is None or entry.part not in _INLINE_KEYWORD_PARTS
                 or entry.meta.get("slot") != "label" or entry.meta.get("inline")
@@ -852,6 +862,38 @@ def merge_keyword_paragraphs(document: DocumentObject, index: list[Entry], ops: 
             entry.meta["inline"] = True
             break
     return [op for op in ops if id(op) not in dropped]
+
+
+def _merge_dragged_content_into_label(document, ops, k, ordinal_of, insert_text, dropped) -> None:
+    """`ops[k]` 是"生成关键词标签段"：它后面（中间只隔空段）第一段属于同一部件的真实内容，
+    就把标签写到那一段的开头、去掉这条生成指令（见 `merge_keyword_paragraphs`）。"""
+    op = ops[k]
+    part = op.part
+    for nxt in ops[k + 1:]:
+        if nxt.action == "generate":
+            return
+        other = nxt.entry
+        if (nxt.action != "copy" or other is None or other.kind != "paragraph"
+                or id(other) not in ordinal_of):
+            return
+        content_p = document.paragraphs[ordinal_of[id(other)]]
+        if not content_p.text.strip():
+            continue
+        if other.part != part:
+            return
+        pPr = content_p._p.find(qn("w:pPr"))
+        if pPr is not None and pPr.find(qn("w:sectPr")) is not None:
+            return
+        label = (insert_text.get(part) or part) if part == "关键词" else (
+            _english_labels(insert_text)[1] + keyword_label_gap(part, insert_text))
+        stripped = label.rstrip(" 　")
+        gap = label[len(stripped):] or keyword_label_separator(stripped)
+        run_el = OxmlElement("w:r")
+        content_p._p.insert(1 if pPr is not None else 0, run_el)
+        set_run_text(Run(run_el, content_p), stripped + gap)
+        other.meta.update(slot="label", inline=True)
+        dropped.add(id(op))
+        return
 
 
 def _make_inline_keyword_paragraph(document: DocumentObject, label: str, content: str,
